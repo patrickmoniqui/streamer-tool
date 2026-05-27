@@ -1,0 +1,43 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Dev Server",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "npm run dev"
+    },
+    {
+      "name": "Settings Page",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:5173/",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "name": "Overlay Page",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:5173/overlay.html?style=broadcast&layout=compact&refresh=10&playoffs=0&clock=1&mute=1",
+      "webRoot": "${workspaceFolder}"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Run Settings Locally",
+      "configurations": [
+        "Dev Server",
+        "Settings Page"
+      ],
+      "stopAll": true
+    },
+    {
+      "name": "Run Overlay Locally",
+      "configurations": [
+        "Dev Server",
+        "Overlay Page"
+      ],
+      "stopAll": true
+    }
+  ]
+}

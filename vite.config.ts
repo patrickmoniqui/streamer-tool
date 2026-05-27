@@ -15,6 +15,23 @@ export default defineConfig(({ command }) => {
   const rewriteApiPath = useLocalWorker
     ? (path: string) => path
     : (path: string) => path.replace(/^\/api/, '');
+  const rewriteRedirectLocation = (location: string | undefined): string | undefined => {
+    if (!location || useLocalWorker) {
+      return location;
+    }
+
+    try {
+      const redirectUrl = new URL(location, proxyTarget);
+
+      if (redirectUrl.origin !== 'https://api-web.nhle.com') {
+        return location;
+      }
+
+      return `/api${redirectUrl.pathname.replace(/^\/v1/, '')}${redirectUrl.search}`;
+    } catch {
+      return location;
+    }
+  };
 
   return {
     base: command === 'build' ? './' : '/',
@@ -31,6 +48,19 @@ export default defineConfig(({ command }) => {
           target: proxyTarget,
           changeOrigin: true,
           rewrite: rewriteApiPath,
+          configure(proxy) {
+            proxy.on('proxyRes', (proxyResponse) => {
+              const locationHeader = proxyResponse.headers.location;
+
+              const rewrittenLocation = rewriteRedirectLocation(
+                typeof locationHeader === 'string' ? locationHeader : undefined,
+              );
+
+              if (rewrittenLocation) {
+                proxyResponse.headers.location = rewrittenLocation;
+              }
+            });
+          },
         },
       },
     },

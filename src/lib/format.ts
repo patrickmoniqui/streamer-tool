@@ -87,11 +87,12 @@ export function getUpcomingCountdownDetail(
     return null;
   }
 
-  const totalMinutes = Math.max(1, Math.ceil(diffMs / 60_000));
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+  const totalSeconds = Math.max(0, Math.floor(diffMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
 
-  return `In ${String(hours).padStart(2, '0')}h${String(minutes).padStart(2, '0')}`;
+  return `In ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
 export function getStatusBadge(game: NhlGame): string {

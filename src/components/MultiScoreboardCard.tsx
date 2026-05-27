@@ -62,6 +62,7 @@ export function MultiScoreboardCard({
   const showCreditReveal = useCreditReveal(showCredit);
   const isCompact = layout === 'compact';
   const [showUpcomingCountdown, setShowUpcomingCountdown] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
   const [goalReactions, setGoalReactions] = useState<
     Record<number, MultiGoalReaction>
   >({});
@@ -69,12 +70,24 @@ export function MultiScoreboardCard({
     new Map(),
   );
   const reactionTimeoutsRef = useRef<Map<number, number>>(new Map());
+  const hasRotatingUpcomingGame = games.some(
+    (game) => !!getUpcomingCountdownDetail(game, now),
+  );
 
   useEffect(() => {
-    const hasRotatingUpcomingGame = games.some(
-      (game) => !!getUpcomingCountdownDetail(game),
-    );
+    if (!hasRotatingUpcomingGame) {
+      setNow(Date.now());
+      return;
+    }
 
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasRotatingUpcomingGame, games]);
+
+  useEffect(() => {
     if (!hasRotatingUpcomingGame) {
       setShowUpcomingCountdown(true);
       return;
@@ -217,6 +230,7 @@ export function MultiScoreboardCard({
             goalReaction?.alignment === 'home'
               ? `${game.id}-home-${goalReaction.key}`
               : `${game.id}-home`;
+          const hasUpcomingCountdown = !!getUpcomingCountdownDetail(game, now);
 
           return (
             <div
@@ -283,13 +297,14 @@ export function MultiScoreboardCard({
                   {getStatusBadge(game)}
                 </span>
                 <span className="multi-scoreboard-detail">
-                  {getUpcomingCountdownDetail(game)
+                  {hasUpcomingCountdown
                     ? getStatusDetail(game, showClock, null, {
+                        now,
                         upcomingDetailMode: showUpcomingCountdown
                           ? 'countdown'
                           : 'schedule',
                       })
-                    : getStatusDetail(game, showClock)}
+                    : getStatusDetail(game, showClock, null, { now })}
                 </span>
               </div>
             </div>

@@ -182,6 +182,7 @@ function useDisplayedStatusDetail(
   previousGame: NhlGame | null,
 ): string {
   const [showPrimaryUpcomingDetail, setShowPrimaryUpcomingDetail] = useState(true);
+  const [now, setNow] = useState(() => Date.now());
   const gameId = game?.id ?? null;
   const gameState = game?.gameState ?? null;
   const gameStartTime = game?.startTimeUTC ?? null;
@@ -189,11 +190,23 @@ function useDisplayedStatusDetail(
   const previousAwayScore = previousGame?.awayTeam.score ?? null;
   const previousHomeScore = previousGame?.homeTeam.score ?? null;
   const previousStartTime = previousGame?.startTimeUTC ?? null;
-  const now = Date.now();
   const hasCountdownDetail =
     !!game && isUpcomingGame(game) && !!getUpcomingCountdownDetail(game, now);
   const canRotatePreviousResult =
     !!game && !!previousGame && isUpcomingGame(game) && !hasCountdownDetail;
+
+  useEffect(() => {
+    if (!hasCountdownDetail) {
+      setNow(Date.now());
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [hasCountdownDetail, gameId, gameStartTime]);
 
   useEffect(() => {
     if (!hasCountdownDetail && !canRotatePreviousResult) {
