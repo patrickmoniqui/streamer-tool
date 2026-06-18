@@ -2,7 +2,7 @@ import { getApiBaseUrl } from './config';
 import type { OverlayConfig } from './types';
 import { buildLiveGoalOverlayUrl, buildOverlayUrl } from './urlState';
 
-const INSTALL_ID_STORAGE_KEY = 'nhl-live-feed-install-id';
+const INSTALL_ID_STORAGE_KEY = 'sport-live-feed-install-id';
 
 export type AnalyticsEventType =
   | 'settings_opened'
@@ -25,6 +25,7 @@ interface AnalyticsEventPayload {
     playoffsOnly: boolean;
     refreshSeconds: number;
     showClock: boolean;
+    sport: OverlayConfig['sport'];
     style: OverlayConfig['style'];
     teamCount: number;
     teamsKey: string;
@@ -82,6 +83,7 @@ function buildEventPayload(
       playoffsOnly: config.playoffsOnly,
       refreshSeconds: config.refreshSeconds,
       showClock: config.showClock,
+      sport: config.sport,
       style: config.style,
       teamCount: config.teams.length,
       teamsKey: getTeamsKey(config),

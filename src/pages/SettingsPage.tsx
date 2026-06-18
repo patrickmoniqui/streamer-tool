@@ -20,15 +20,13 @@ import { useOverlayData } from '../lib/useOverlayData';
 import {
   MAX_REFRESH_SECONDS,
   MIN_REFRESH_SECONDS,
+  SPORT_OPTIONS,
   buildOverlayUrl,
   parseConfig,
 } from '../lib/urlState';
-import type { OverlayConfig } from '../lib/types';
+import type { NhlGame, OverlayConfig } from '../lib/types';
 
 const SELECTABLE_NHL_TEAMS = NHL_TEAMS.filter((team) => team.abbrev !== 'AUTO');
-const SELECTABLE_NHL_TEAM_BY_ABBREV: Map<string, (typeof SELECTABLE_NHL_TEAMS)[number]> = new Map(
-  SELECTABLE_NHL_TEAMS.map((team) => [team.abbrev, team]),
-);
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 const GOAL_ANIMATION_OPTIONS = [
   {
@@ -47,6 +45,40 @@ const GOAL_ANIMATION_OPTIONS = [
     description: 'A calmer celebration wall with floating team logos.',
   },
 ] as const;
+
+interface SelectableTeam {
+  abbrev: string;
+  name: string;
+  logo?: string;
+}
+
+function getGameTeamName(team: NhlGame['awayTeam']): string {
+  return team.commonName?.default ?? team.placeName?.default ?? team.abbrev;
+}
+
+function getGameTeamLogo(team: NhlGame['awayTeam']): string | undefined {
+  return team.logo ?? team.darkLogo;
+}
+
+function buildSoccerTeams(games: NhlGame[]): SelectableTeam[] {
+  const teamsByAbbrev = new Map<string, SelectableTeam>();
+
+  for (const game of games) {
+    for (const team of [game.awayTeam, game.homeTeam]) {
+      if (!teamsByAbbrev.has(team.abbrev)) {
+        teamsByAbbrev.set(team.abbrev, {
+          abbrev: team.abbrev,
+          name: getGameTeamName(team),
+          logo: getGameTeamLogo(team),
+        });
+      }
+    }
+  }
+
+  return Array.from(teamsByAbbrev.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+}
 
 function TwitchSocialIcon() {
   return (
@@ -101,6 +133,13 @@ export function SettingsPage() {
   const lastLiveGoalLinkCopyTrackedAtRef = useRef(0);
   const { data, error, loading } = useOverlayData(config);
   const previousGame = findPreviousFinalGame(data.selectedGame, data.games);
+  const selectableTeams =
+    config.sport === 'nhl'
+      ? SELECTABLE_NHL_TEAMS
+      : buildSoccerTeams(data.games);
+  const selectableTeamByAbbrev: Map<string, SelectableTeam> = new Map(
+    selectableTeams.map((team) => [team.abbrev, team]),
+  );
   const selectedStyle =
     OVERLAY_STYLE_OPTIONS.find((option) => option.value === config.style) ??
     OVERLAY_STYLE_OPTIONS[0];
@@ -108,7 +147,7 @@ export function SettingsPage() {
     GOAL_ANIMATION_OPTIONS.find((option) => option.value === config.goalAnimation) ??
     GOAL_ANIMATION_OPTIONS[0];
   const selectedTeams = config.teams
-    .map((teamAbbrev) => SELECTABLE_NHL_TEAM_BY_ABBREV.get(teamAbbrev))
+    .map((teamAbbrev) => selectableTeamByAbbrev.get(teamAbbrev))
     .filter((team) => team !== undefined);
   const selectedTeamNames = selectedTeams.map((team) => team.name);
   const teamPickerLabel =
@@ -352,6 +391,30 @@ export function SettingsPage() {
 
       <section className="settings-layout">
         <div className="settings-panel">
+          <label className="field">
+            <span>Sport</span>
+            <select
+              value={config.sport}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  sport: event.target.value as OverlayConfig['sport'],
+                  mode: 'auto',
+                  teams: [],
+                  gameId: undefined,
+                  playoffsOnly:
+                    event.target.value === 'nhl' ? current.playoffsOnly : false,
+                }))
+              }
+            >
+              {SPORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <div className="field">
             <span>Teams</span>
             <details className="team-picker">
@@ -434,7 +497,7 @@ export function SettingsPage() {
                         >
                           <span className="team-priority-handle" aria-hidden="true" />
                           <span className="team-priority-rank">{index + 1}</span>
-                          {'logo' in team ? (
+                          {team.logo ? (
                             <img
                               src={team.logo}
                               alt=""
@@ -468,8 +531,13 @@ export function SettingsPage() {
                     })}
                   </div>
                 ) : null}
+                {config.sport === 'soccer' && !selectableTeams.length ? (
+                  <p className="team-picker-copy">
+                    Soccer teams appear here when the current feed has games.
+                  </p>
+                ) : null}
                 <div className="team-picker-grid">
-                  {SELECTABLE_NHL_TEAMS.map((team) => {
+                  {selectableTeams.map((team) => {
                     const checked = config.teams.includes(team.abbrev);
 
                     return (
@@ -482,7 +550,7 @@ export function SettingsPage() {
                           checked={checked}
                           onChange={() => toggleTeam(team.abbrev)}
                         />
-                        {'logo' in team ? (
+                        {team.logo ? (
                           <img
                             src={team.logo}
                             alt=""
@@ -592,19 +660,21 @@ export function SettingsPage() {
             </small>
           </div>
 
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={config.playoffsOnly}
-              onChange={(event) =>
-                setConfig((current) => ({
-                  ...current,
-                  playoffsOnly: event.target.checked,
-                }))
-              }
-            />
-            <span>Playoffs only</span>
-          </label>
+          {config.sport === 'nhl' ? (
+            <label className="toggle">
+              <input
+                type="checkbox"
+                checked={config.playoffsOnly}
+                onChange={(event) =>
+                  setConfig((current) => ({
+                    ...current,
+                    playoffsOnly: event.target.checked,
+                  }))
+                }
+              />
+              <span>Playoffs only</span>
+            </label>
+          ) : null}
 
           <label className="toggle">
             <input
@@ -646,32 +716,6 @@ export function SettingsPage() {
           ) : null}
 
           <div className="field">
-            <span>Overlay link</span>
-            <textarea
-              ref={overlayLinkRef}
-              readOnly
-              value={trackedOverlayUrl}
-              rows={4}
-              onCopy={handleOverlayLinkCopied}
-            />
-          </div>
-
-          <button
-            className="primary-button"
-            type="button"
-            onClick={() =>
-              void copyUrl(
-                trackedOverlayUrl,
-                overlayLinkRef,
-                handleOverlayLinkCopied,
-                'overlay link',
-              )
-            }
-          >
-            {overlayCopied ? 'Copied' : 'Copy overlay link'}
-          </button>
-
-          <div className="field">
             <span>Live goal animation URL</span>
             <textarea
               ref={liveGoalLinkRef}
@@ -700,7 +744,6 @@ export function SettingsPage() {
           >
             {liveGoalCopied ? 'Copied' : 'Copy live goal URL'}
           </button>
-          {copyError ? <p className="helper-text helper-error">{copyError}</p> : null}
 
           {loading ? <p className="helper-text">Loading current games…</p> : null}
           {error ? <p className="helper-text helper-error">{error}</p> : null}
@@ -759,6 +802,34 @@ export function SettingsPage() {
               }
               emptyLabel="No game found for this setup"
             />
+          </div>
+          <div className="preview-link-panel">
+            <div className="field">
+              <span>Overlay link</span>
+              <textarea
+                ref={overlayLinkRef}
+                readOnly
+                value={trackedOverlayUrl}
+                rows={4}
+                onCopy={handleOverlayLinkCopied}
+              />
+            </div>
+
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() =>
+                void copyUrl(
+                  trackedOverlayUrl,
+                  overlayLinkRef,
+                  handleOverlayLinkCopied,
+                  'overlay link',
+                )
+              }
+            >
+              {overlayCopied ? 'Copied' : 'Copy overlay link'}
+            </button>
+            {copyError ? <p className="helper-text helper-error">{copyError}</p> : null}
           </div>
           {canUseTestingTools && developerMode ? (
             <div className="developer-card">

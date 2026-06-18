@@ -63,6 +63,7 @@ export function MultiScoreboardCard({
   const isCompact = layout === 'compact';
   const [showUpcomingCountdown, setShowUpcomingCountdown] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  const [liveClockBaseMs, setLiveClockBaseMs] = useState(() => Date.now());
   const [goalReactions, setGoalReactions] = useState<
     Record<number, MultiGoalReaction>
   >({});
@@ -73,9 +74,17 @@ export function MultiScoreboardCard({
   const hasRotatingUpcomingGame = games.some(
     (game) => !!getUpcomingCountdownDetail(game, now),
   );
+  const hasLiveSoccerClock = games.some(
+    (game) =>
+      game.sport === 'soccer' &&
+      isLiveGame(game) &&
+      showClock &&
+      game.clock?.running &&
+      !game.clock.inIntermission,
+  );
 
   useEffect(() => {
-    if (!hasRotatingUpcomingGame) {
+    if (!hasRotatingUpcomingGame && !hasLiveSoccerClock) {
       setNow(Date.now());
       return;
     }
@@ -85,7 +94,13 @@ export function MultiScoreboardCard({
     }, 1_000);
 
     return () => window.clearInterval(intervalId);
-  }, [hasRotatingUpcomingGame, games]);
+  }, [hasRotatingUpcomingGame, hasLiveSoccerClock, games]);
+
+  useEffect(() => {
+    const nextNow = Date.now();
+    setLiveClockBaseMs(nextNow);
+    setNow(nextNow);
+  }, [games]);
 
   useEffect(() => {
     if (!hasRotatingUpcomingGame) {
@@ -208,6 +223,7 @@ export function MultiScoreboardCard({
       className={`scoreboard-card multi-scoreboard-card ${className ?? ''}`.trim()}
       data-style={style}
       data-layout={layout}
+      data-sport={primaryGame?.sport ?? games[0]?.sport ?? 'nhl'}
     >
       {!isCompact ? (
         <div className="scorebug-header">
@@ -220,6 +236,7 @@ export function MultiScoreboardCard({
         {games.map((game) => {
           const awayLogo = getTeamLogo(game.awayTeam);
           const homeLogo = getTeamLogo(game.homeTeam);
+          const teamImageLabel = game.sport === 'soccer' ? 'flag' : 'logo';
           const isPrimaryGame = primaryGame?.id === game.id;
           const goalReaction = goalReactions[game.id];
           const awayScoreKey =
@@ -231,6 +248,14 @@ export function MultiScoreboardCard({
               ? `${game.id}-home-${goalReaction.key}`
               : `${game.id}-home`;
           const hasUpcomingCountdown = !!getUpcomingCountdownDetail(game, now);
+          const liveClockOffsetSeconds =
+            game.sport === 'soccer' &&
+            isLiveGame(game) &&
+            showClock &&
+            game.clock?.running &&
+            !game.clock.inIntermission
+              ? Math.floor((now - liveClockBaseMs) / 1_000)
+              : 0;
 
           return (
             <div
@@ -248,7 +273,7 @@ export function MultiScoreboardCard({
                   {awayLogo ? (
                     <img
                       src={awayLogo}
-                      alt={`${game.awayTeam.abbrev} logo`}
+                      alt={`${game.awayTeam.abbrev} ${teamImageLabel}`}
                       className="multi-scoreboard-team-logo"
                     />
                   ) : (
@@ -282,7 +307,7 @@ export function MultiScoreboardCard({
                   {homeLogo ? (
                     <img
                       src={homeLogo}
-                      alt={`${game.homeTeam.abbrev} logo`}
+                      alt={`${game.homeTeam.abbrev} ${teamImageLabel}`}
                       className="multi-scoreboard-team-logo"
                     />
                   ) : (
@@ -299,12 +324,16 @@ export function MultiScoreboardCard({
                 <span className="multi-scoreboard-detail">
                   {hasUpcomingCountdown
                     ? getStatusDetail(game, showClock, null, {
+                        liveClockOffsetSeconds,
                         now,
                         upcomingDetailMode: showUpcomingCountdown
                           ? 'countdown'
                           : 'schedule',
                       })
-                    : getStatusDetail(game, showClock, null, { now })}
+                    : getStatusDetail(game, showClock, null, {
+                        liveClockOffsetSeconds,
+                        now,
+                      })}
                 </span>
               </div>
             </div>

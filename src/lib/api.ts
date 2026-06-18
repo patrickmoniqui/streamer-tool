@@ -1,5 +1,5 @@
 import { getApiBaseUrl } from './config';
-import type { ScheduleResponse, ScoreResponse } from './types';
+import type { ScheduleResponse, ScoreResponse, Sport } from './types';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -26,17 +26,28 @@ async function fetchJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function fetchScheduleNow(signal?: AbortSignal): Promise<ScheduleResponse> {
-  return fetchJson<ScheduleResponse>('/schedule/now', signal);
+function buildSportPath(sport: Sport, path: string): string {
+  return sport === 'nhl' ? path : `/${sport}${path}`;
 }
 
-export function fetchScoreNow(signal?: AbortSignal): Promise<ScoreResponse> {
-  return fetchJson<ScoreResponse>('/score/now', signal);
+export function fetchScheduleNow(
+  sport: Sport,
+  signal?: AbortSignal,
+): Promise<ScheduleResponse> {
+  return fetchJson<ScheduleResponse>(buildSportPath(sport, '/schedule/now'), signal);
+}
+
+export function fetchScoreNow(
+  sport: Sport,
+  signal?: AbortSignal,
+): Promise<ScoreResponse> {
+  return fetchJson<ScoreResponse>(buildSportPath(sport, '/score/now'), signal);
 }
 
 export function fetchScoreByDate(
+  sport: Sport,
   date: string,
   signal?: AbortSignal,
 ): Promise<ScoreResponse> {
-  return fetchJson<ScoreResponse>(`/score/${date}`, signal);
+  return fetchJson<ScoreResponse>(buildSportPath(sport, `/score/${date}`), signal);
 }

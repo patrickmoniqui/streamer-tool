@@ -1,4 +1,4 @@
-name = "nhl-live-feed-worker"
+name = "sport-live-feed-worker"
 main = "src/index.ts"
 compatibility_date = "2026-04-19"
 

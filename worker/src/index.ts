@@ -1,4 +1,6 @@
-const API_BASE = 'https://api-web.nhle.com/v1';
+const NHL_API_BASE = 'https://api-web.nhle.com/v1';
+const ESPN_SOCCER_SCOREBOARD_URL =
+  'https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard';
 const TWITCH_AUTHORIZE_URL = 'https://id.twitch.tv/oauth2/authorize';
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
@@ -10,6 +12,7 @@ const OAUTH_STATE_COOKIE_NAME = 'twitch_oauth_state';
 interface Env {
   ANALYTICS_DB?: D1Database;
   ANALYTICS_READ_TOKEN?: string;
+  SOCCER_SCOREBOARD_URL?: string;
   TWITCH_GATE_ENABLED?: string;
   TWITCH_ALLOWED_ORIGIN?: string;
   TWITCH_BROADCASTER_ID?: string;
@@ -19,6 +22,92 @@ interface Env {
   TWITCH_SESSION_SECRET?: string;
   TWITCH_SESSION_TTL_SECONDS?: string;
   TWITCH_SUCCESS_REDIRECT_URL?: string;
+}
+
+interface NormalizedNamedValue {
+  default: string;
+}
+
+interface NormalizedTeamRecord {
+  id: number;
+  abbrev: string;
+  score?: number;
+  commonName?: NormalizedNamedValue;
+  placeName?: NormalizedNamedValue;
+  logo?: string;
+  darkLogo?: string;
+}
+
+interface NormalizedGame {
+  id: number;
+  sport: 'soccer';
+  leagueName?: string;
+  statusDetail?: string;
+  season: number;
+  gameType: number;
+  gameState: string;
+  gameDate?: string;
+  startTimeUTC: string;
+  awayTeam: NormalizedTeamRecord;
+  homeTeam: NormalizedTeamRecord;
+  clock?: {
+    timeRemaining: string;
+    secondsRemaining: number;
+    running: boolean;
+    inIntermission: boolean;
+  } | null;
+  periodDescriptor?: {
+    number: number;
+    periodType: string;
+    maxRegulationPeriods?: number;
+  };
+}
+
+interface EspnSoccerScoreboard {
+  leagues?: Array<{ name?: string; abbreviation?: string }>;
+  events?: EspnSoccerEvent[];
+}
+
+interface EspnSoccerEvent {
+  id?: string;
+  uid?: string;
+  date?: string;
+  name?: string;
+  shortName?: string;
+  season?: { year?: number; type?: number };
+  status?: {
+    clock?: number;
+    displayClock?: string;
+    period?: number;
+    type?: {
+      completed?: boolean;
+      description?: string;
+      detail?: string;
+      name?: string;
+      shortDetail?: string;
+      state?: string;
+    };
+  };
+  competitions?: Array<{
+    altGameNote?: string;
+    status?: EspnSoccerEvent['status'];
+    competitors?: EspnSoccerCompetitor[];
+  }>;
+}
+
+interface EspnSoccerCompetitor {
+  homeAway?: string;
+  score?: string;
+  team?: {
+    id?: string;
+    abbreviation?: string;
+    displayName?: string;
+    location?: string;
+    name?: string;
+    shortDisplayName?: string;
+    logo?: string;
+    logos?: Array<{ href?: string }>;
+  };
 }
 
 interface TwitchTokenResponse {
@@ -503,6 +592,279 @@ function mergeProxyHeaders(response: Response, pathname: string): Headers {
   );
   headers.set('Cache-Control', `public, max-age=${buildCacheTtl(pathname)}`);
   return headers;
+}
+
+function formatIsoDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(date: Date, days: number): Date {
+  const nextDate = new Date(date);
+  nextDate.setUTCDate(nextDate.getUTCDate() + days);
+  return nextDate;
+}
+
+function parseScoreDate(pathname: string): Date {
+  const rawDate = pathname.split('/').at(-1);
+
+  if (!rawDate || rawDate === 'now') {
+    return new Date();
+  }
+
+  const parsedDate = new Date(`${rawDate}T12:00:00Z`);
+  return Number.isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+}
+
+function formatEspnDate(date: Date): string {
+  return formatIsoDate(date).replace(/-/g, '');
+}
+
+function hashString(value: string): number {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+}
+
+function normalizeSoccerTeam(
+  competitor: EspnSoccerCompetitor | undefined,
+): NormalizedTeamRecord {
+  const team = competitor?.team ?? {};
+  const displayName =
+    team.displayName?.trim() ||
+    team.shortDisplayName?.trim() ||
+    team.name?.trim() ||
+    team.abbreviation?.trim() ||
+    'TBD';
+  const abbrev =
+    team.abbreviation?.trim().toUpperCase() ||
+    team.shortDisplayName?.trim().slice(0, 3).toUpperCase() ||
+    displayName.slice(0, 3).toUpperCase();
+  const rawId = Number(team.id);
+  const logo = team.logo || team.logos?.find((candidate) => candidate.href)?.href;
+
+  return {
+    id: Number.isFinite(rawId) ? rawId : hashString(displayName),
+    abbrev,
+    score: Number(competitor?.score ?? 0),
+    commonName: { default: displayName },
+    placeName: { default: team.location?.trim() || displayName },
+    logo,
+    darkLogo: logo,
+  };
+}
+
+function normalizeSoccerGameState(status: EspnSoccerEvent['status']): string {
+  const statusType = status?.type;
+
+  if (statusType?.completed) {
+    return 'FINAL';
+  }
+
+  if (statusType?.state === 'in') {
+    return 'LIVE';
+  }
+
+  if (statusType?.state === 'post') {
+    return 'FINAL';
+  }
+
+  return 'PRE';
+}
+
+function normalizeSoccerPeriodType(status: EspnSoccerEvent['status']): string {
+  const description = status?.type?.description?.toLowerCase() ?? '';
+  const name = status?.type?.name?.toLowerCase() ?? '';
+
+  if (description.includes('half') || name.includes('halftime')) {
+    return 'HALFTIME';
+  }
+
+  if (description.includes('pen') || name.includes('pen')) {
+    return 'PENALTY_SHOOTOUT';
+  }
+
+  if (description.includes('extra') || name.includes('extra')) {
+    return 'EXTRA_TIME';
+  }
+
+  return 'REG';
+}
+
+function formatSoccerClock(status: EspnSoccerEvent['status']): string {
+  const displayClock = status?.displayClock
+    ?.trim()
+    .replace(/[’′`]/g, "'")
+    .replace(/\s+/g, '')
+    .replace(/min(?:ute)?s?$/i, '');
+
+  if (displayClock) {
+    const timeMatch = displayClock.match(/^(\d+):(\d{1,2})$/);
+
+    if (timeMatch) {
+      return `${timeMatch[1]}:${timeMatch[2].padStart(2, '0')}`;
+    }
+
+    const stoppageMatch = displayClock.match(/^(\d+)'?\+(\d+)'?$/);
+
+    if (stoppageMatch) {
+      return `${stoppageMatch[1]}+${stoppageMatch[2]}:00`;
+    }
+
+    const minuteMatch = displayClock.match(/^(\d+)'?$/);
+
+    if (minuteMatch) {
+      return `${minuteMatch[1]}:00`;
+    }
+
+    return displayClock;
+  }
+
+  const clockSeconds = Number(status?.clock ?? 0);
+
+  if (!Number.isFinite(clockSeconds) || clockSeconds <= 0) {
+    return '';
+  }
+
+  return `${Math.floor(clockSeconds / 60)}:${String(Math.floor(clockSeconds % 60)).padStart(2, '0')}`;
+}
+
+function normalizeSoccerEvent(
+  event: EspnSoccerEvent,
+  fallbackLeagueName: string,
+): NormalizedGame | null {
+  const competition = event.competitions?.[0];
+  const competitors = competition?.competitors ?? [];
+  const status = event.status ?? competition?.status;
+  const awayCompetitor = competitors.find((competitor) => competitor.homeAway === 'away');
+  const homeCompetitor = competitors.find((competitor) => competitor.homeAway === 'home');
+
+  if (!awayCompetitor || !homeCompetitor || !event.date) {
+    return null;
+  }
+
+  const eventId = Number(event.id);
+  const gameState = normalizeSoccerGameState(status);
+  const statusType = status?.type;
+  const statusDetail =
+    statusType?.shortDetail?.trim() ||
+    statusType?.detail?.trim() ||
+    statusType?.description?.trim();
+  const period = status?.period ?? 0;
+  const clockSeconds = Number(status?.clock ?? 0);
+  const periodType = normalizeSoccerPeriodType(status);
+  const displayClock = formatSoccerClock(status);
+
+  return {
+    id: Number.isFinite(eventId) ? eventId : hashString(event.uid ?? event.name ?? event.date),
+    sport: 'soccer',
+    leagueName: competition?.altGameNote ?? fallbackLeagueName,
+    statusDetail,
+    season: event.season?.year ?? new Date(event.date).getUTCFullYear(),
+    gameType: event.season?.type ?? 2,
+    gameState,
+    gameDate: formatIsoDate(new Date(event.date)),
+    startTimeUTC: event.date,
+    awayTeam: normalizeSoccerTeam(awayCompetitor),
+    homeTeam: normalizeSoccerTeam(homeCompetitor),
+    clock:
+      gameState === 'LIVE'
+        ? {
+            timeRemaining: displayClock,
+            secondsRemaining: Number.isFinite(clockSeconds) ? clockSeconds : 0,
+            running: true,
+            inIntermission: periodType === 'HALFTIME',
+          }
+        : null,
+    periodDescriptor: period
+      ? {
+          number: period,
+          periodType,
+          maxRegulationPeriods: 2,
+        }
+      : undefined,
+  };
+}
+
+async function fetchSoccerGames(date: Date, env: Env): Promise<NormalizedGame[]> {
+  const upstreamUrl = new URL(
+    env.SOCCER_SCOREBOARD_URL?.trim() || ESPN_SOCCER_SCOREBOARD_URL,
+  );
+  upstreamUrl.searchParams.set('dates', formatEspnDate(date));
+
+  const response = await fetch(upstreamUrl.toString(), {
+    headers: {
+      Accept: 'application/json',
+    },
+    cf: {
+      cacheEverything: true,
+      cacheTtl: buildCacheTtl('/soccer/score/now'),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Soccer scoreboard failed with ${response.status}`);
+  }
+
+  const payload = (await response.json()) as EspnSoccerScoreboard;
+  const fallbackLeagueName =
+    payload.leagues?.[0]?.abbreviation || payload.leagues?.[0]?.name || 'Soccer';
+
+  return (payload.events ?? [])
+    .map((event) => normalizeSoccerEvent(event, fallbackLeagueName))
+    .filter((game): game is NormalizedGame => Boolean(game));
+}
+
+async function buildSoccerProxyResponse(
+  request: Request,
+  env: Env,
+  pathname: string,
+): Promise<Response> {
+  const date = parseScoreDate(pathname);
+  const currentDate = formatIsoDate(date);
+  const previousDate = formatIsoDate(addDays(date, -1));
+  const nextDate = formatIsoDate(addDays(date, 1));
+  const cache = caches.default;
+  const cacheKey = new Request(request.url, { method: 'GET' });
+  const cached = await cache.match(cacheKey);
+
+  if (cached) {
+    return new Response(cached.body, {
+      status: cached.status,
+      headers: mergeProxyHeaders(cached, pathname),
+    });
+  }
+
+  const games = await fetchSoccerGames(date, env);
+  const body = pathname.startsWith('/soccer/schedule/')
+    ? {
+        previousStartDate: previousDate,
+        nextStartDate: nextDate,
+        gameWeek: [
+          {
+            date: currentDate,
+            dayAbbrev: new Intl.DateTimeFormat('en-US', {
+              weekday: 'short',
+              timeZone: 'UTC',
+            }).format(date),
+            numberOfGames: games.length,
+            games,
+          },
+        ],
+      }
+    : {
+        currentDate,
+        prevDate: previousDate,
+        nextDate,
+        games,
+      };
+
+  const response = jsonResponse(body, mergeProxyHeaders(new Response(), pathname));
+  await cache.put(cacheKey, response.clone());
+  return response;
 }
 
 function parseCookies(request: Request): Record<string, string> {
@@ -1203,9 +1565,27 @@ async function handleAnalyticsSummary(
   }
 }
 
-async function proxyRequest(request: Request): Promise<Response> {
+async function proxyRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
-  const pathname = url.pathname.replace(/^\/api/, '');
+  let pathname = url.pathname.replace(/^\/api/, '');
+
+  if (pathname.startsWith('/soccer/')) {
+    if (
+      !pathname.startsWith('/soccer/score/') &&
+      !pathname.startsWith('/soccer/schedule/')
+    ) {
+      return new Response(JSON.stringify({ error: 'Not found' }), {
+        status: 404,
+        headers: buildPublicCorsHeaders(),
+      });
+    }
+
+    return buildSoccerProxyResponse(request, env, pathname);
+  }
+
+  if (pathname.startsWith('/nhl/')) {
+    pathname = pathname.replace(/^\/nhl/, '');
+  }
 
   if (!pathname.startsWith('/score/') && !pathname.startsWith('/schedule/')) {
     return new Response(JSON.stringify({ error: 'Not found' }), {
@@ -1214,7 +1594,7 @@ async function proxyRequest(request: Request): Promise<Response> {
     });
   }
 
-  const upstreamUrl = `${API_BASE}${pathname}${url.search}`;
+  const upstreamUrl = `${NHL_API_BASE}${pathname}${url.search}`;
   const cache = caches.default;
   const cacheKey = new Request(upstreamUrl, { method: 'GET' });
   const cached = await cache.match(cacheKey);
@@ -1587,6 +1967,6 @@ export default {
       return handleAnalyticsSummary(request, env);
     }
 
-    return proxyRequest(request);
+    return proxyRequest(request, env);
   },
 };

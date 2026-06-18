@@ -70,14 +70,17 @@ function TeamRow({
   team,
   score,
   alignment,
+  sport,
 }: {
   team: TeamRecord;
   score: number;
   alignment: 'away' | 'home';
+  sport?: NhlGame['sport'];
 }) {
   const logo = getTeamLogo(team);
   const location = getTeamLocation(team);
   const name = getTeamName(team);
+  const imageLabel = sport === 'soccer' ? 'flag' : 'logo';
 
   return (
     <div className={`scorebug-row scorebug-row-${alignment}`}>
@@ -86,7 +89,7 @@ function TeamRow({
         {logo ? (
           <img
             src={logo}
-            alt={`${location || team.abbrev} ${name} logo`}
+            alt={`${location || team.abbrev} ${name} ${imageLabel}`}
             className="team-logo"
           />
         ) : (
@@ -111,17 +114,20 @@ function CompactTeam({
   team,
   score,
   alignment,
+  sport,
 }: {
   team: TeamRecord;
   score: number;
   alignment: 'away' | 'home';
+  sport?: NhlGame['sport'];
 }) {
   const logo = getTeamLogo(team);
   const name = getTeamName(team);
+  const imageLabel = sport === 'soccer' ? 'flag' : 'logo';
   const logoSlot = logo ? (
     <img
       src={logo}
-      alt={`${team.abbrev} logo`}
+      alt={`${team.abbrev} ${imageLabel}`}
       className="compact-team-logo"
     />
   ) : (
@@ -134,11 +140,13 @@ function CompactTeam({
       {alignment === 'away' ? (
         <>
           <div className="compact-team-copy">{logoSlot}</div>
+          <span className="compact-team-code">{team.abbrev}</span>
           {scoreSlot}
         </>
       ) : (
         <>
           {scoreSlot}
+          <span className="compact-team-code">{team.abbrev}</span>
           <div className="compact-team-copy">{logoSlot}</div>
         </>
       )}
@@ -183,20 +191,30 @@ function useDisplayedStatusDetail(
 ): string {
   const [showPrimaryUpcomingDetail, setShowPrimaryUpcomingDetail] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  const [liveClockBaseMs, setLiveClockBaseMs] = useState(() => Date.now());
   const gameId = game?.id ?? null;
   const gameState = game?.gameState ?? null;
   const gameStartTime = game?.startTimeUTC ?? null;
+  const gameClockSeconds = game?.clock?.secondsRemaining ?? null;
+  const gameClockText = game?.clock?.timeRemaining ?? null;
   const previousGameId = previousGame?.id ?? null;
   const previousAwayScore = previousGame?.awayTeam.score ?? null;
   const previousHomeScore = previousGame?.homeTeam.score ?? null;
   const previousStartTime = previousGame?.startTimeUTC ?? null;
   const hasCountdownDetail =
     !!game && isUpcomingGame(game) && !!getUpcomingCountdownDetail(game, now);
+  const hasLiveSoccerClock =
+    !!game &&
+    game.sport === 'soccer' &&
+    isLiveGame(game) &&
+    showClock &&
+    game.clock?.running &&
+    !game.clock.inIntermission;
   const canRotatePreviousResult =
     !!game && !!previousGame && isUpcomingGame(game) && !hasCountdownDetail;
 
   useEffect(() => {
-    if (!hasCountdownDetail) {
+    if (!hasCountdownDetail && !hasLiveSoccerClock) {
       setNow(Date.now());
       return;
     }
@@ -206,7 +224,13 @@ function useDisplayedStatusDetail(
     }, 1_000);
 
     return () => window.clearInterval(intervalId);
-  }, [hasCountdownDetail, gameId, gameStartTime]);
+  }, [hasCountdownDetail, hasLiveSoccerClock, gameId, gameStartTime]);
+
+  useEffect(() => {
+    const nextNow = Date.now();
+    setLiveClockBaseMs(nextNow);
+    setNow(nextNow);
+  }, [gameId, gameClockSeconds, gameClockText]);
 
   useEffect(() => {
     if (!hasCountdownDetail && !canRotatePreviousResult) {
@@ -238,7 +262,11 @@ function useDisplayedStatusDetail(
   }
 
   if (!isUpcomingGame(game)) {
-    return getStatusDetail(game, showClock, previousGame);
+    return getStatusDetail(game, showClock, previousGame, {
+      liveClockOffsetSeconds: hasLiveSoccerClock
+        ? Math.floor((now - liveClockBaseMs) / 1_000)
+        : 0,
+    });
   }
 
   if (hasCountdownDetail) {
@@ -349,6 +377,7 @@ export function ScoreboardCard({
       className={`scoreboard-card ${className ?? ''}`.trim()}
       data-style={style}
       data-layout={layout}
+      data-sport={game.sport ?? 'nhl'}
     >
       {isCompact ? (
         <>
@@ -357,6 +386,7 @@ export function ScoreboardCard({
               team={game.awayTeam}
               score={game.awayTeam.score ?? 0}
               alignment="away"
+              sport={game.sport}
             />
             <div className="compact-meta">
               <div className="compact-meta-detail">
@@ -370,6 +400,7 @@ export function ScoreboardCard({
               team={game.homeTeam}
               score={game.homeTeam.score ?? 0}
               alignment="home"
+              sport={game.sport}
             />
           </div>
           {showCreditReveal ? (
@@ -396,11 +427,13 @@ export function ScoreboardCard({
               team={game.awayTeam}
               score={game.awayTeam.score ?? 0}
               alignment="away"
+              sport={game.sport}
             />
             <TeamRow
               team={game.homeTeam}
               score={game.homeTeam.score ?? 0}
               alignment="home"
+              sport={game.sport}
             />
           </div>
           {footerText ? (

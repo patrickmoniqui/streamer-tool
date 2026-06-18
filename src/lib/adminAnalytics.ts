@@ -1,6 +1,6 @@
 import { getApiBaseUrl } from './config';
 
-const ADMIN_TOKEN_STORAGE_KEY = 'nhl-live-feed-admin-token';
+const ADMIN_TOKEN_STORAGE_KEY = 'sport-live-feed-admin-token';
 
 export interface AnalyticsBreakdownEntry {
   count: number;

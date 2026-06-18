@@ -63,13 +63,13 @@ export function useOverlayData(config: OverlayConfig): OverlayDataState {
 
       try {
         const [schedule, score] = await Promise.all([
-          fetchScheduleNow(activeController.signal),
-          fetchScoreNow(activeController.signal),
+          fetchScheduleNow(config.sport, activeController.signal),
+          fetchScoreNow(config.sport, activeController.signal),
         ]);
 
         const previousScore =
           score.prevDate
-            ? await fetchScoreByDate(score.prevDate, activeController.signal).catch(
+            ? await fetchScoreByDate(config.sport, score.prevDate, activeController.signal).catch(
                 () => null,
               )
             : null;
@@ -184,6 +184,7 @@ export function useOverlayData(config: OverlayConfig): OverlayDataState {
     config.playoffsOnly,
     config.refreshSeconds,
     config.showClock,
+    config.sport,
     config.teams.join(','),
   ]);
 

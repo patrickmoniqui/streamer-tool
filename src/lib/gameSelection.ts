@@ -58,6 +58,10 @@ export function getTeamMatch(game: NhlGame, team: string): boolean {
 }
 
 export function isPlayoffGame(game: NhlGame): boolean {
+  if (game.sport === 'soccer') {
+    return false;
+  }
+
   return game.gameType === 3;
 }
 
@@ -176,7 +180,7 @@ export function buildGameSelection(
   now = Date.now(),
 ): Pick<DataSnapshot, 'displayMode' | 'selectedGame' | 'selectedGames'> {
   const eligibleGames = games.filter((game) => {
-    if (config.playoffsOnly && !isPlayoffGame(game)) {
+    if (config.sport === 'nhl' && config.playoffsOnly && !isPlayoffGame(game)) {
       return false;
     }
 

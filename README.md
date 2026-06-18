@@ -1,17 +1,18 @@
-# NHL Live Feed
+# Sport Live Feed
 
-Static React app for an OBS/Twitch-friendly NHL score overlay, with a settings page that generates a shareable browser-source URL.
+Static React app for OBS/Twitch-friendly live sports score overlays, with a settings page that generates a shareable browser-source URL.
 
-## V1 scope
+## Scope
 
 - `index.html`: settings page
 - `overlay.html`: transparent overlay page
 - default mode is schedule-driven auto selection
 - optional team targeting in auto mode
 - manual game override
-- playoffs-only toggle
+- sport selection for NHL and soccer/football
+- NHL playoffs-only toggle
 - show clock toggle
-- Cloudflare Worker proxy for NHL schedule and score feeds
+- Cloudflare Worker proxy for live sports schedule and score feeds
 
 ## Local development
 
@@ -27,7 +28,7 @@ npm install
 npm run dev
 ```
 
-The Vite dev server proxies `/api/*` to the live NHL API, so the settings page and overlay work locally without the Worker.
+The Vite dev server proxies legacy NHL `/api/*` requests to the live NHL API, so the default NHL settings page and overlay work locally without the Worker.
 
 ## Local frontend + Worker
 
@@ -43,7 +44,7 @@ This starts:
 - Wrangler on `http://127.0.0.1:8787`
 
 In this mode, Vite forwards `/api/*` to the local Worker so the app behaves much closer to production.
-Use this mode if you want to test analytics locally, since plain `npm run dev` proxies `/api/*` straight to the NHL API.
+Use this mode if you want to test analytics or soccer/football locally, since plain `npm run dev` proxies legacy `/api/*` requests straight to the NHL API.
 
 ## Production setup
 
@@ -83,10 +84,15 @@ git push
 
 ## Worker routes
 
+- `/api/nhl/schedule/now`
+- `/api/nhl/score/now`
 - `/api/schedule/now`
 - `/api/score/now`
+- `/api/soccer/schedule/now`
+- `/api/soccer/score/now`
+- `/api/soccer/score/:date`
 
-These proxy the NHL public web endpoints with short cache windows and permissive CORS for the GitHub Pages frontend.
+The NHL routes proxy public NHL web endpoints. The soccer routes normalize ESPN soccer scoreboard responses into the app's shared game shape. All routes use short cache windows and permissive CORS for the GitHub Pages frontend.
 
 ## Optional Twitch gate
 
@@ -131,7 +137,7 @@ Analytics writes are best-effort and no-op automatically when the Worker has no 
 1. Create a D1 database:
 
 ```bash
-npx wrangler d1 create nhl-live-feed-analytics
+npx wrangler d1 create sport-live-feed-analytics
 ```
 
 2. Add the returned binding details to `worker/wrangler.toml`:
@@ -139,14 +145,17 @@ npx wrangler d1 create nhl-live-feed-analytics
 ```toml
 [[d1_databases]]
 binding = "ANALYTICS_DB"
-database_name = "nhl-live-feed-analytics"
+database_name = "sport-live-feed-analytics"
 database_id = "<your-d1-database-id>"
 ```
+
+Existing deployments can keep an older D1 `database_name` as long as the
+`database_id` is correct.
 
 3. Apply the schema:
 
 ```bash
-npx wrangler d1 execute nhl-live-feed-analytics --remote --file worker/sql/analytics.sql
+npx wrangler d1 execute sport-live-feed-analytics --remote --file worker/sql/analytics.sql
 ```
 
 4. Set a read token for the summary endpoint:
@@ -198,5 +207,5 @@ The implementation intentionally does not store raw IP addresses.
 If you already created the `analytics_events` table before these fields existed, run this one-time migration:
 
 ```bash
-npx wrangler d1 execute nhl-live-feed-analytics --remote --file worker/sql/analytics_location_client_migration.sql
+npx wrangler d1 execute sport-live-feed-analytics --remote --file worker/sql/analytics_location_client_migration.sql
 ```

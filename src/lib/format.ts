@@ -5,6 +5,49 @@ const UPCOMING_COUNTDOWN_WINDOW_MS = 24 * 60 * 60 * 1_000;
 
 type UpcomingDetailMode = 'default' | 'schedule' | 'countdown';
 
+function formatClockSeconds(totalSeconds: number): string {
+  const minutes = Math.max(0, Math.floor(totalSeconds / 60));
+  const seconds = Math.max(0, Math.floor(totalSeconds % 60));
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatSoccerClockLabel(clockText: string, offsetSeconds = 0): string {
+  const normalized = clockText
+    .trim()
+    .replace(/[’′`]/g, "'")
+    .replace(/\s+/g, '')
+    .replace(/min(?:ute)?s?$/i, '');
+
+  if (!normalized) {
+    return '';
+  }
+
+  const timeMatch = normalized.match(/^(\d+):(\d{1,2})$/);
+
+  if (timeMatch) {
+    const totalSeconds =
+      Number(timeMatch[1]) * 60 + Number(timeMatch[2]) + offsetSeconds;
+    return formatClockSeconds(totalSeconds);
+  }
+
+  const stoppageMatch = normalized.match(/^(\d+)'?\+(\d+)'?$/);
+
+  if (stoppageMatch) {
+    const stoppageSeconds = Number(stoppageMatch[2]) * 60 + offsetSeconds;
+    const stoppageMinutes = Math.floor(stoppageSeconds / 60);
+    const seconds = Math.floor(stoppageSeconds % 60);
+    return `${stoppageMatch[1]}+${stoppageMinutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  const minuteMatch = normalized.match(/^(\d+)'?$/);
+
+  if (minuteMatch) {
+    return formatClockSeconds(Number(minuteMatch[1]) * 60 + offsetSeconds);
+  }
+
+  return clockText.toUpperCase();
+}
+
 function ordinal(value: number): string {
   if (value === 1) {
     return '1st';
@@ -26,6 +69,22 @@ export function formatPeriodLabel(game: NhlGame): string {
 
   if (!descriptor) {
     return '';
+  }
+
+  if (game.sport === 'soccer') {
+    if (descriptor.periodType === 'HALFTIME') {
+      return 'HT';
+    }
+
+    if (descriptor.periodType === 'EXTRA_TIME') {
+      return 'ET';
+    }
+
+    if (descriptor.periodType === 'PENALTY_SHOOTOUT') {
+      return 'PK';
+    }
+
+    return descriptor.number === 1 ? '1H' : descriptor.number === 2 ? '2H' : '';
   }
 
   if (descriptor.periodType === 'SO') {
@@ -118,6 +177,7 @@ export function getStatusDetail(
   showClock: boolean,
   previousGame?: NhlGame | null,
   options: {
+    liveClockOffsetSeconds?: number;
     now?: number;
     upcomingDetailMode?: UpcomingDetailMode;
   } = {},
@@ -125,6 +185,23 @@ export function getStatusDetail(
   if (isLiveGame(game)) {
     const clock = game.clock;
     const period = formatPeriodLabel(game);
+    const liveClockOffsetSeconds = Math.max(0, options.liveClockOffsetSeconds ?? 0);
+
+    if (game.sport === 'soccer') {
+      if (showClock && clock?.timeRemaining) {
+        return formatSoccerClockLabel(clock.timeRemaining, liveClockOffsetSeconds);
+      }
+
+      if (showClock && typeof clock?.secondsRemaining === 'number') {
+        return formatClockSeconds(clock.secondsRemaining + liveClockOffsetSeconds);
+      }
+
+      if (game.statusDetail) {
+        return game.statusDetail.toUpperCase();
+      }
+
+      return period || 'IN PROGRESS';
+    }
 
     if (clock?.inIntermission) {
       return period ? `${period} INTERMISSION` : 'INTERMISSION';
@@ -138,6 +215,10 @@ export function getStatusDetail(
   }
 
   if (isFinalGame(game)) {
+    if (game.sport === 'soccer') {
+      return game.statusDetail?.toUpperCase() ?? 'FULL TIME';
+    }
+
     if (game.periodDescriptor?.periodType === 'OT') {
       return 'OVERTIME';
     }
@@ -161,7 +242,7 @@ export function getStatusDetail(
   }
 
   if (upcomingDetailMode === 'schedule') {
-    return formatStartTime(game.startTimeUTC);
+    return game.statusDetail ?? formatStartTime(game.startTimeUTC);
   }
 
   const previousResult = previousGame ? formatPreviousResult(previousGame) : null;
@@ -170,7 +251,7 @@ export function getStatusDetail(
     return previousResult;
   }
 
-  return formatStartTime(game.startTimeUTC);
+  return game.statusDetail ?? formatStartTime(game.startTimeUTC);
 }
 
 export function getSeriesLine(game: NhlGame): string | null {

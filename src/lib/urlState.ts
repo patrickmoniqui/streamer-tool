@@ -1,10 +1,11 @@
 import { isOverlayStyle } from './overlayStyles';
-import type { GoalAnimationStyle, OverlayConfig } from './types';
+import type { GoalAnimationStyle, OverlayConfig, Sport } from './types';
 
 export const MIN_REFRESH_SECONDS = 10;
 export const MAX_REFRESH_SECONDS = 60;
 
 export const DEFAULT_CONFIG: OverlayConfig = {
+  sport: 'nhl',
   mode: 'auto',
   style: 'broadcast',
   layout: 'compact',
@@ -16,6 +17,11 @@ export const DEFAULT_CONFIG: OverlayConfig = {
   muted: false,
   showCredit: true,
 };
+
+export const SPORT_OPTIONS: Array<{ value: Sport; label: string }> = [
+  { value: 'nhl', label: 'NHL' },
+  { value: 'soccer', label: 'Soccer / Football' },
+];
 
 function parseBoolean(value: string | null, fallback: boolean): boolean {
   if (value === null) {
@@ -39,6 +45,10 @@ function isGoalAnimationStyle(value: string): value is GoalAnimationStyle {
   return ['logo-storm', 'jumbotron', 'logo-rain'].includes(value);
 }
 
+function isSport(value: string | null): value is Sport {
+  return value === 'nhl' || value === 'soccer';
+}
+
 function normalizeRefreshSeconds(value: string | null): number {
   const parsed = Number(value);
 
@@ -53,6 +63,8 @@ function normalizeRefreshSeconds(value: string | null): number {
 
 export function parseConfig(search: string): OverlayConfig {
   const params = new URLSearchParams(search);
+  const sportParam = params.get('sport');
+  const sport = isSport(sportParam) ? sportParam : DEFAULT_CONFIG.sport;
   const styleParam = params.get('style');
   const style =
     styleParam && isOverlayStyle(styleParam) ? styleParam : DEFAULT_CONFIG.style;
@@ -76,6 +88,7 @@ export function parseConfig(search: string): OverlayConfig {
 
   return {
     mode,
+    sport,
     style,
     layout,
     goalAnimation,
@@ -95,6 +108,7 @@ export function buildOverlayUrl(config: OverlayConfig): string {
   const refreshSeconds = normalizeRefreshSeconds(String(config.refreshSeconds));
 
   overlayUrl.searchParams.set('style', config.style);
+  overlayUrl.searchParams.set('sport', config.sport);
   overlayUrl.searchParams.set('layout', config.layout);
   overlayUrl.searchParams.set('goalAnimation', config.goalAnimation);
   overlayUrl.searchParams.set('refresh', String(refreshSeconds));
@@ -118,6 +132,7 @@ export function buildLiveGoalOverlayUrl(config: OverlayConfig): string {
   const refreshSeconds = normalizeRefreshSeconds(String(config.refreshSeconds));
 
   overlayUrl.searchParams.set('style', config.style);
+  overlayUrl.searchParams.set('sport', config.sport);
   overlayUrl.searchParams.set('layout', config.layout);
   overlayUrl.searchParams.set('goalAnimation', config.goalAnimation);
   overlayUrl.searchParams.set('refresh', String(refreshSeconds));

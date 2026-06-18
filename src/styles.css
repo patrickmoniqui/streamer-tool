@@ -209,7 +209,6 @@ textarea {
   padding: 24px;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
   gap: 16px;
 }
 
@@ -992,6 +991,11 @@ textarea {
   justify-content: flex-start;
 }
 
+.preview-link-panel {
+  display: grid;
+  gap: 14px;
+}
+
 .overlay-page {
   padding: 14px;
 }
@@ -1482,12 +1486,12 @@ textarea {
 }
 
 .compact-team-away {
-  grid-template-columns: auto 62px;
+  grid-template-columns: 64px minmax(42px, 1fr) 62px;
   background: var(--scorebug-row-away-bg);
 }
 
 .compact-team-home {
-  grid-template-columns: 62px auto;
+  grid-template-columns: 62px minmax(42px, 1fr) 64px;
   background: var(--scorebug-row-home-bg);
 }
 
@@ -1495,21 +1499,42 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
+  align-self: stretch;
   height: 100%;
   width: auto;
   overflow: hidden;
   padding: 0;
 }
 
+.compact-team-code {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--scorebug-team-name);
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .compact-team-logo {
-  width: auto;
+  width: 100%;
   height: 100%;
-  max-width: 58px;
-  max-height: 100%;
+  max-width: none;
+  max-height: none;
   object-fit: contain;
   filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.28));
   padding: 0;
-  zoom: 2;
+}
+
+.scoreboard-card[data-sport="soccer"] .compact-team-logo {
+  object-fit: cover;
 }
 
 .compact-team-logo-fallback {
@@ -2245,15 +2270,15 @@ textarea {
 }
 
 .scoreboard-card[data-style="minimal"][data-layout="compact"] .compact-team-away {
-  grid-template-columns: auto 54px;
+  grid-template-columns: 64px minmax(42px, 1fr) 54px;
 }
 
 .scoreboard-card[data-style="minimal"][data-layout="compact"] .compact-team-home {
-  grid-template-columns: 54px auto;
+  grid-template-columns: 54px minmax(42px, 1fr) 64px;
 }
 
 .scoreboard-card[data-style="minimal"][data-layout="compact"] .compact-team-logo {
-  max-width: 50px;
+  max-width: none;
 }
 
 .scoreboard-card[data-style="minimal"][data-layout="compact"] .compact-team-score {
@@ -2460,11 +2485,11 @@ textarea {
   }
 
   .compact-team-away {
-    grid-template-columns: auto 54px;
+    grid-template-columns: 52px minmax(36px, 1fr) 54px;
   }
 
   .compact-team-home {
-    grid-template-columns: 54px auto;
+    grid-template-columns: 54px minmax(36px, 1fr) 52px;
   }
 
   .compact-team-score {
@@ -2472,8 +2497,15 @@ textarea {
     font-size: 1.95rem;
   }
 
+  .compact-team-code {
+    font-size: 1.08rem;
+  }
+
   .compact-team-logo {
-    max-width: 50px;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
   }
 
   .scoreboard-empty-credit {
