@@ -6,11 +6,13 @@ export interface TwitchCheckInCommand {
 interface TwitchChatClientOptions {
   channel: string;
   onCheckIn: (command: TwitchCheckInCommand) => void;
+  onReset?: (viewerName: string) => void;
   onStatus?: (status: string) => void;
 }
 
 const TWITCH_CHAT_URL = 'wss://irc-ws.chat.twitch.tv:443';
 const CHECKIN_PREFIX = '!checkin';
+const RESET_COMMAND = '!globe reset';
 
 function parseDisplayName(tags: string, fallback: string): string {
   const displayNameTag = tags
@@ -21,7 +23,9 @@ function parseDisplayName(tags: string, fallback: string): string {
   return displayNameTag?.trim() || fallback;
 }
 
-function parsePrivMsg(rawMessage: string): TwitchCheckInCommand | null {
+function parsePrivMsg(
+  rawMessage: string,
+): { checkIn?: TwitchCheckInCommand; resetViewerName?: string } | null {
   const match = rawMessage.match(/^@([^ ]+) :([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.+)$/);
 
   if (!match) {
@@ -30,6 +34,13 @@ function parsePrivMsg(rawMessage: string): TwitchCheckInCommand | null {
 
   const [, tags, login, message] = match;
   const trimmedMessage = message.trim();
+  const viewerName = parseDisplayName(tags, login);
+
+  if (trimmedMessage.toLowerCase() === RESET_COMMAND) {
+    return {
+      resetViewerName: viewerName,
+    };
+  }
 
   if (
     trimmedMessage.toLowerCase() !== CHECKIN_PREFIX &&
@@ -45,14 +56,17 @@ function parsePrivMsg(rawMessage: string): TwitchCheckInCommand | null {
   }
 
   return {
-    viewerName: parseDisplayName(tags, login),
-    locationQuery,
+    checkIn: {
+      viewerName,
+      locationQuery,
+    },
   };
 }
 
 export function connectTwitchCheckInChat({
   channel,
   onCheckIn,
+  onReset,
   onStatus,
 }: TwitchChatClientOptions): () => void {
   const normalizedChannel = channel.trim().replace(/^#/, '').toLowerCase();
@@ -85,8 +99,12 @@ export function connectTwitchCheckInChat({
 
       const command = parsePrivMsg(message);
 
-      if (command) {
-        onCheckIn(command);
+      if (command?.checkIn) {
+        onCheckIn(command.checkIn);
+      }
+
+      if (command?.resetViewerName) {
+        onReset?.(command.resetViewerName);
       }
     }
   });

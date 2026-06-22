@@ -4,6 +4,7 @@ import { feature } from 'topojson-client';
 import countriesTopology from 'world-atlas/countries-110m.json';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import {
+  clearGlobeSession,
   fetchGlobeCheckIns,
   parseGlobeConfig,
   submitGlobeCheckIn,
@@ -14,10 +15,11 @@ import { connectTwitchCheckInChat } from '../lib/twitchChat';
 
 const GLOBE_RADIUS = 1;
 const DEFAULT_CAMERA_Z = 3.25;
-const FOCUS_CAMERA_Z = 1.8;
-const FOCUS_ZOOM_IN_MS = 2_400;
+const FOCUS_ROTATION_MS = 3_200;
 const FOCUS_HOLD_MS = 900;
-const FOCUS_ZOOM_OUT_MS = 2_400;
+const FOCUS_RESUME_MS = 2_000;
+const GLOBE_TILT_X = -0.28;
+const INITIAL_GLOBE_YAW = -0.55;
 
 interface GlobeMarkerLabel {
   element: HTMLDivElement;
@@ -59,8 +61,6 @@ const COUNTRY_BORDERS = feature(
   countriesTopology as unknown as Topology<{ countries: GeometryCollection }>,
   countriesTopology.objects.countries as GeometryCollection,
 ) as CountryBorderCollection;
-const HIGHLIGHT_TEXTURE_WIDTH = 1024;
-const HIGHLIGHT_TEXTURE_HEIGHT = 512;
 
 function getFeatureKey(feature: CountryBorderFeature): string {
   return String(feature.id ?? feature.properties?.name ?? '');
@@ -80,7 +80,7 @@ function latLonToVector(latitude: number, longitude: number, radius: number): TH
 
 function getMarkerPosition(latitude: number, longitude: number): GlobeMarkerPosition {
   return {
-    labelPosition: latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.18),
+    labelPosition: latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.145),
     surfacePosition: latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.02),
     tipPosition: latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.12),
   };
@@ -89,9 +89,27 @@ function getMarkerPosition(latitude: number, longitude: number): GlobeMarkerPosi
 function easeInOutCubic(value: number): number {
   const clampedValue = THREE.MathUtils.clamp(value, 0, 1);
 
-  return clampedValue < 0.5
-    ? 4 * clampedValue * clampedValue * clampedValue
-    : 1 - Math.pow(-2 * clampedValue + 2, 3) / 2;
+  return clampedValue * clampedValue * clampedValue * (
+    clampedValue * (clampedValue * 6 - 15) + 10
+  );
+}
+
+function createGlobeOrientation(yaw: number): THREE.Quaternion {
+  return new THREE.Quaternion()
+    .setFromEuler(new THREE.Euler(GLOBE_TILT_X, yaw, 0, 'YXZ'));
+}
+
+function getYawFromGlobeOrientation(quaternion: THREE.Quaternion): number {
+  return new THREE.Euler().setFromQuaternion(quaternion, 'YXZ').y;
+}
+
+function getFocusQuaternionForLocation(latitude: number, longitude: number): THREE.Quaternion {
+  const targetPosition = latLonToVector(latitude, longitude, GLOBE_RADIUS).normalize();
+
+  return new THREE.Quaternion().setFromUnitVectors(
+    targetPosition,
+    new THREE.Vector3(0, 0, 1),
+  );
 }
 
 function isPointInRing(longitude: number, latitude: number, ring: GeoJsonPosition[]): boolean {
@@ -214,6 +232,49 @@ function createCountryBorderMaterial(): THREE.ShaderMaterial {
   });
 }
 
+function createActiveCountryBorderMaterial(
+  color: THREE.ColorRepresentation,
+  opacity: number,
+): THREE.ShaderMaterial {
+  const activeColor = new THREE.Color(color);
+
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      borderColor: { value: activeColor },
+      opacity: { value: opacity },
+    },
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    vertexShader: `
+      varying float vFacing;
+
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vec3 globeCenter = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+        vec3 normalDirection = normalize(worldPosition.xyz - globeCenter);
+        vec3 viewDirection = normalize(cameraPosition - worldPosition.xyz);
+        vFacing = dot(normalDirection, viewDirection);
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 borderColor;
+      uniform float opacity;
+      varying float vFacing;
+
+      void main() {
+        if (vFacing <= 0.0) {
+          discard;
+        }
+
+        float alpha = smoothstep(0.02, 0.2, vFacing) * opacity;
+        gl_FragColor = vec4(borderColor, alpha);
+      }
+    `,
+  });
+}
+
 function createCountryFillMaterial(): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     transparent: true,
@@ -325,27 +386,38 @@ function createCountryFillMeshFromPolygon(
   const contour = outerRing.map(
     ([longitude, latitude]) => new THREE.Vector2(longitude, latitude),
   );
-  const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+  const holes = polygon
+    .slice(1)
+    .map((ring) =>
+      ring
+        .slice(0, -1)
+        .map(([longitude, latitude]) => new THREE.Vector2(longitude, latitude)),
+    )
+    .filter((ring) => ring.length >= 3);
+  const triangles = THREE.ShapeUtils.triangulateShape(contour, holes);
+  const allRings = [outerRing, ...polygon.slice(1).map((ring) => ring.slice(0, -1))];
+  const positions = allRings.flat();
 
-  if (!triangles.length) {
+  if (!triangles.length || positions.length < 3) {
     return null;
   }
 
-  const vertices = new Float32Array(outerRing.length * 3);
+  const vertices = new Float32Array(positions.length * 3);
 
-  outerRing.forEach(([longitude, latitude], index) => {
-    const vertex = latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.004);
+  positions.forEach(([longitude, latitude], index) => {
+    const vertex = latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.001);
     vertices[index * 3] = vertex.x;
     vertices[index * 3 + 1] = vertex.y;
     vertices[index * 3 + 2] = vertex.z;
   });
 
-  const indices = triangles.flat();
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-  geometry.setIndex(indices);
+  geometry.setIndex(triangles.flat());
 
-  return new THREE.Mesh(geometry, material);
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.renderOrder = 1;
+  return mesh;
 }
 
 function addCountryFills(
@@ -422,6 +494,56 @@ function addCountryBorders(
   }
 }
 
+function addActiveCountryBorders(
+  activeCountryBorderGroup: THREE.Group,
+  highlightedCountryKeys: Set<string>,
+): void {
+  if (!highlightedCountryKeys.size) {
+    return;
+  }
+
+  const outerMaterial = createActiveCountryBorderMaterial(0x2f9dff, 0.68);
+  const innerMaterial = createActiveCountryBorderMaterial(0xf2fbff, 1);
+
+  for (const countryKey of highlightedCountryKeys) {
+    const feature = (COUNTRY_BORDERS.features ?? []).find(
+      (candidate) => getFeatureKey(candidate) === countryKey,
+    );
+
+    if (!feature?.geometry?.coordinates) {
+      continue;
+    }
+
+    const polygons =
+      feature.geometry.type === 'Polygon'
+        ? [feature.geometry.coordinates as GeoJsonPolygon]
+        : feature.geometry.type === 'MultiPolygon'
+          ? (feature.geometry.coordinates as GeoJsonMultiPolygon)
+          : [];
+
+    for (const polygon of polygons) {
+      const outerRing = polygon[0];
+
+      if (!outerRing) {
+        continue;
+      }
+
+      const outerLine = createBorderLineFromRing(outerRing, outerMaterial);
+      const innerLine = createBorderLineFromRing(outerRing, innerMaterial);
+
+      if (outerLine) {
+        outerLine.scale.setScalar(1.006);
+        activeCountryBorderGroup.add(outerLine);
+      }
+
+      if (innerLine) {
+        innerLine.scale.setScalar(1.012);
+        activeCountryBorderGroup.add(innerLine);
+      }
+    }
+  }
+}
+
 function disposeGroup(group: THREE.Group): void {
   group.traverse((object) => {
     const mesh = object as THREE.Object3D & {
@@ -457,8 +579,9 @@ export function GlobeScene({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const labelsRef = useRef<GlobeMarkerLabel[]>([]);
   const markerGroupRef = useRef<THREE.Group | null>(null);
-  const globeGroupRef = useRef<THREE.Group | null>(null);
   const fillGroupRef = useRef<THREE.Group | null>(null);
+  const activeCountryBorderGroupRef = useRef<THREE.Group | null>(null);
+  const globeGroupRef = useRef<THREE.Group | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const focusAnimationRef = useRef<{
@@ -466,7 +589,6 @@ export function GlobeScene({
     markerPlaced: boolean;
     resumeQuaternion: THREE.Quaternion;
     startedAt: number;
-    startCameraZ: number;
     startQuaternion: THREE.Quaternion;
     targetQuaternion: THREE.Quaternion;
   } | null>(null);
@@ -521,7 +643,7 @@ export function GlobeScene({
     scene.add(rimLight);
 
     const globeGroup = new THREE.Group();
-    globeGroup.rotation.y = -0.55;
+    globeGroup.quaternion.copy(createGlobeOrientation(INITIAL_GLOBE_YAW));
     scene.add(globeGroup);
     globeGroupRef.current = globeGroup;
 
@@ -531,6 +653,10 @@ export function GlobeScene({
 
     const borderGroup = new THREE.Group();
     globeGroup.add(borderGroup);
+
+    const activeCountryBorderGroup = new THREE.Group();
+    globeGroup.add(activeCountryBorderGroup);
+    activeCountryBorderGroupRef.current = activeCountryBorderGroup;
 
     const markerGroup = new THREE.Group();
     globeGroup.add(markerGroup);
@@ -551,23 +677,19 @@ export function GlobeScene({
 
       if (focusAnimation) {
         const elapsed = performance.now() - focusAnimation.startedAt;
-        const totalDuration = FOCUS_ZOOM_IN_MS + FOCUS_HOLD_MS + FOCUS_ZOOM_OUT_MS;
+        const totalDuration = FOCUS_ROTATION_MS + FOCUS_HOLD_MS + FOCUS_RESUME_MS;
 
-        if (elapsed <= FOCUS_ZOOM_IN_MS) {
-          const progress = easeInOutCubic(elapsed / FOCUS_ZOOM_IN_MS);
+        if (elapsed <= FOCUS_ROTATION_MS) {
+          const progress = easeInOutCubic(elapsed / FOCUS_ROTATION_MS);
           globeGroup.quaternion.slerpQuaternions(
             focusAnimation.startQuaternion,
             focusAnimation.targetQuaternion,
             progress,
           );
-          camera.position.z = THREE.MathUtils.lerp(
-            focusAnimation.startCameraZ,
-            FOCUS_CAMERA_Z,
-            progress,
-          );
-        } else if (elapsed <= FOCUS_ZOOM_IN_MS + FOCUS_HOLD_MS) {
+          camera.position.z = DEFAULT_CAMERA_Z;
+        } else if (elapsed <= FOCUS_ROTATION_MS + FOCUS_HOLD_MS) {
           globeGroup.quaternion.copy(focusAnimation.targetQuaternion);
-          camera.position.z = FOCUS_CAMERA_Z;
+          camera.position.z = DEFAULT_CAMERA_Z;
 
           if (!focusAnimation.markerPlaced) {
             focusAnimation.markerPlaced = true;
@@ -575,18 +697,14 @@ export function GlobeScene({
           }
         } else if (elapsed <= totalDuration) {
           const progress = easeInOutCubic(
-            (elapsed - FOCUS_ZOOM_IN_MS - FOCUS_HOLD_MS) / FOCUS_ZOOM_OUT_MS,
+            (elapsed - FOCUS_ROTATION_MS - FOCUS_HOLD_MS) / FOCUS_RESUME_MS,
           );
           globeGroup.quaternion.slerpQuaternions(
             focusAnimation.targetQuaternion,
             focusAnimation.resumeQuaternion,
             progress,
           );
-          camera.position.z = THREE.MathUtils.lerp(
-            FOCUS_CAMERA_Z,
-            DEFAULT_CAMERA_Z,
-            progress,
-          );
+          camera.position.z = DEFAULT_CAMERA_Z;
         } else {
           if (!focusAnimation.markerPlaced) {
             focusAnimation.markerPlaced = true;
@@ -599,7 +717,12 @@ export function GlobeScene({
           onFocusCompleteRef.current?.(focusAnimation.checkIn);
         }
       } else {
-        globeGroup.rotateY(rotationSpeedRef.current * 0.01);
+        globeGroup.quaternion.copy(
+          createGlobeOrientation(
+            getYawFromGlobeOrientation(globeGroup.quaternion) +
+              rotationSpeedRef.current * 0.01,
+          ),
+        );
       }
 
       globeGroup.updateMatrixWorld();
@@ -632,15 +755,18 @@ export function GlobeScene({
       renderer.dispose();
       disposeGroup(fillGroup);
       disposeGroup(borderGroup);
+      disposeGroup(activeCountryBorderGroup);
       fillGroupRef.current = null;
+      activeCountryBorderGroupRef.current = null;
       sceneContainer.removeChild(renderer.domElement);
     };
   }, []);
 
   useEffect(() => {
     const fillGroup = fillGroupRef.current;
+    const activeCountryBorderGroup = activeCountryBorderGroupRef.current;
 
-    if (!fillGroup) {
+    if (!fillGroup || !activeCountryBorderGroup) {
       return;
     }
 
@@ -660,6 +786,9 @@ export function GlobeScene({
     disposeGroup(fillGroup);
     fillGroup.clear();
     addCountryFills(fillGroup, highlightedCountryKeys);
+    disposeGroup(activeCountryBorderGroup);
+    activeCountryBorderGroup.clear();
+    addActiveCountryBorders(activeCountryBorderGroup, highlightedCountryKeys);
   }, [checkIns]);
 
   useEffect(() => {
@@ -677,25 +806,14 @@ export function GlobeScene({
     }
 
     placedFocusKeyRef.current = focusKey;
-    const totalFocusDuration = FOCUS_ZOOM_IN_MS + FOCUS_HOLD_MS + FOCUS_ZOOM_OUT_MS;
+    const totalFocusDuration = FOCUS_ROTATION_MS + FOCUS_HOLD_MS + FOCUS_RESUME_MS;
+    const startYaw = getYawFromGlobeOrientation(globeGroup.quaternion);
     const defaultRotationDuringFocus =
       rotationSpeedRef.current * 0.01 * (totalFocusDuration / (1000 / 60));
-    const resumeQuaternion = globeGroup.quaternion
-      .clone()
-      .multiply(
-        new THREE.Quaternion().setFromAxisAngle(
-          new THREE.Vector3(0, 1, 0),
-          defaultRotationDuringFocus,
-        ),
-      );
-    const targetPosition = latLonToVector(
+    const resumeQuaternion = createGlobeOrientation(startYaw + defaultRotationDuringFocus);
+    const targetQuaternion = getFocusQuaternionForLocation(
       focusCheckIn.checkIn.latitude,
       focusCheckIn.checkIn.longitude,
-      GLOBE_RADIUS,
-    ).normalize();
-    const targetQuaternion = new THREE.Quaternion().setFromUnitVectors(
-      targetPosition,
-      new THREE.Vector3(0, 0, 1),
     );
 
     focusAnimationRef.current = {
@@ -703,7 +821,6 @@ export function GlobeScene({
       markerPlaced: false,
       resumeQuaternion,
       startedAt: performance.now(),
-      startCameraZ: camera.position.z,
       startQuaternion: globeGroup.quaternion.clone(),
       targetQuaternion,
     };
@@ -811,6 +928,16 @@ export function GlobeOverlayPage() {
     });
   }
 
+  function resetGlobeSession() {
+    setFocusCheckIn(null);
+    setCheckIns([]);
+    pendingLocationsRef.current.clear();
+
+    void clearGlobeSession(config.sessionId).catch(() => {
+      setStatus('Unable to reset globe markers.');
+    });
+  }
+
   useEffect(() => {
     document.body.classList.toggle('globe-transparent-shell', config.transparent);
 
@@ -835,6 +962,9 @@ export function GlobeOverlayPage() {
     return connectTwitchCheckInChat({
       channel: config.channel,
       onStatus: setStatus,
+      onReset() {
+        resetGlobeSession();
+      },
       onCheckIn(command) {
         if (command.locationQuery.trim().toLowerCase() === 'me') {
           const existingCheckIn = checkInsRef.current.find(
