@@ -1,0 +1,312 @@
+import { useEffect, useMemo, useState } from 'react';
+import {
+  DEFAULT_GLOBE_CONFIG,
+  buildGlobeOverlayUrl,
+  clearGlobeSession,
+  createGlobeSessionId,
+  normalizeTwitchChannel,
+  type GlobeCheckIn,
+  type GlobeConfig,
+} from '../lib/globe';
+import { GlobeScene } from './GlobeOverlayPage';
+
+const STORAGE_KEY = 'keylight-globe-settings';
+const PREVIEW_CHECK_INS: GlobeCheckIn[] = [
+  {
+    id: 'preview-montreal',
+    sessionId: 'preview',
+    viewerName: 'ViewerOne',
+    locationQuery: 'Montreal',
+    displayLocation: 'Montreal',
+    latitude: 45.5019,
+    longitude: -73.5674,
+    country: 'Canada',
+    region: 'Quebec',
+    createdAt: 0,
+    updatedAt: 3,
+  },
+  {
+    id: 'preview-los-angeles',
+    sessionId: 'preview',
+    viewerName: 'StreamFan',
+    locationQuery: 'Los Angeles',
+    displayLocation: 'Los Angeles',
+    latitude: 34.0549,
+    longitude: -118.2426,
+    country: 'United States',
+    region: 'California',
+    createdAt: 0,
+    updatedAt: 2,
+  },
+  {
+    id: 'preview-london',
+    sessionId: 'preview',
+    viewerName: 'ChatCrew',
+    locationQuery: 'London',
+    displayLocation: 'London',
+    latitude: 51.5072,
+    longitude: -0.1276,
+    country: 'United Kingdom',
+    createdAt: 0,
+    updatedAt: 1,
+  },
+];
+
+function loadStoredConfig(): GlobeConfig {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+
+    if (!stored) {
+      return {
+        ...DEFAULT_GLOBE_CONFIG,
+        sessionId: createGlobeSessionId(),
+      };
+    }
+
+    const parsed = JSON.parse(stored) as Partial<GlobeConfig>;
+
+    return {
+      ...DEFAULT_GLOBE_CONFIG,
+      ...parsed,
+      channel: normalizeTwitchChannel(parsed.channel ?? ''),
+      sessionId: parsed.sessionId || createGlobeSessionId(),
+    };
+  } catch {
+    return {
+      ...DEFAULT_GLOBE_CONFIG,
+      sessionId: createGlobeSessionId(),
+    };
+  }
+}
+
+export function GlobeSettingsPage() {
+  const [config, setConfig] = useState<GlobeConfig>(() => loadStoredConfig());
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [clearStatus, setClearStatus] = useState<'idle' | 'clearing' | 'cleared' | 'failed'>(
+    'idle',
+  );
+  const overlayUrl = useMemo(() => buildGlobeOverlayUrl(config), [config]);
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+  }, [config]);
+
+  useEffect(() => {
+    if (copyStatus === 'idle') {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setCopyStatus('idle'), 1_500);
+    return () => window.clearTimeout(timeoutId);
+  }, [copyStatus]);
+
+  useEffect(() => {
+    if (clearStatus !== 'cleared') {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setClearStatus('idle'), 1_500);
+    return () => window.clearTimeout(timeoutId);
+  }, [clearStatus]);
+
+  async function copyOverlayUrl() {
+    try {
+      await navigator.clipboard.writeText(overlayUrl);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('failed');
+    }
+  }
+
+  function startNewSession() {
+    setConfig((current) => ({
+      ...current,
+      sessionId: createGlobeSessionId(),
+    }));
+    setClearStatus('idle');
+  }
+
+  async function clearCurrentSession() {
+    setClearStatus('clearing');
+
+    try {
+      await clearGlobeSession(config.sessionId);
+      setClearStatus('cleared');
+    } catch {
+      setClearStatus('failed');
+    }
+  }
+
+  return (
+    <main className="settings-page globe-settings-page">
+      <header className="settings-header">
+        <p className="eyebrow">Keylight Stream Tools</p>
+        <h1>Globe Check-In</h1>
+        <p className="header-copy">
+          Add a rotating viewer map to OBS. Viewers can type{' '}
+          <strong>!checkin Montreal</strong> in Twitch chat to place their name on
+          the globe.
+        </p>
+        <div className="header-meta">
+          <a className="ghost-link" href="../game-score/">
+            Game Score
+          </a>
+          <a className="ghost-link" href="../">
+            All tools
+          </a>
+        </div>
+      </header>
+
+      <div className="settings-layout">
+        <section className="settings-panel">
+          <label className="field">
+            <span>Twitch channel</span>
+            <input
+              className="admin-input"
+              value={config.channel}
+              placeholder="djmoneykey"
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  channel: normalizeTwitchChannel(event.target.value),
+                }))
+              }
+            />
+            <span className="field-hint">
+              Use the channel login only. The overlay listens anonymously for
+              public chat messages.
+            </span>
+          </label>
+
+          <label className="field">
+            <div className="field-header">
+              <span>Rotation speed</span>
+              <span className="field-value">{config.rotationSpeed.toFixed(2)}</span>
+            </div>
+            <input
+              className="range-input"
+              type="range"
+              min="0"
+              max="0.6"
+              step="0.02"
+              value={config.rotationSpeed}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  rotationSpeed: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+
+          <label className="field">
+            <div className="field-header">
+              <span>Marker limit</span>
+              <span className="field-value">{config.markerLimit}</span>
+            </div>
+            <input
+              className="range-input"
+              type="range"
+              min="10"
+              max="250"
+              step="5"
+              value={config.markerLimit}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  markerLimit: Number(event.target.value),
+                }))
+              }
+            />
+          </label>
+
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={config.showLabels}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  showLabels: event.target.checked,
+                }))
+              }
+            />
+            Show viewer labels
+          </label>
+
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={config.transparent}
+              onChange={(event) =>
+                setConfig((current) => ({
+                  ...current,
+                  transparent: event.target.checked,
+                }))
+              }
+            />
+            Transparent OBS background
+          </label>
+
+          <div className="globe-session-actions">
+            <button className="secondary-button" type="button" onClick={startNewSession}>
+              New session
+            </button>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={clearStatus === 'clearing'}
+              onClick={clearCurrentSession}
+            >
+              {clearStatus === 'clearing' ? 'Clearing' : 'Clear markers'}
+            </button>
+          </div>
+
+          {clearStatus === 'failed' ? (
+            <p className="helper-text helper-error">Unable to clear this session.</p>
+          ) : null}
+          {clearStatus === 'cleared' ? (
+            <p className="helper-text">Current session markers cleared.</p>
+          ) : null}
+        </section>
+
+        <section className="preview-panel globe-link-panel">
+          <div>
+            <p className="eyebrow">OBS Browser Source</p>
+            <h2>Overlay URL</h2>
+            <p className="header-copy">
+              Add this URL as a browser source. Keep the session ID private if you
+              want to control when the map resets.
+            </p>
+          </div>
+          <textarea className="globe-overlay-url" readOnly value={overlayUrl} rows={5} />
+          <button className="primary-button" type="button" onClick={copyOverlayUrl}>
+            {copyStatus === 'copied' ? 'Copied' : 'Copy overlay URL'}
+          </button>
+          {copyStatus === 'failed' ? (
+            <p className="helper-text helper-error">
+              Clipboard access failed. Select the URL field manually.
+            </p>
+          ) : null}
+          <div className="globe-preview-frame" aria-label="Globe overlay preview">
+            <GlobeScene
+              checkIns={PREVIEW_CHECK_INS}
+              config={{
+                ...config,
+                showLabels: config.showLabels,
+                transparent: false,
+              }}
+              className="globe-preview-canvas"
+            />
+          </div>
+          <div className="globe-session-card">
+            <p className="supporter-label">Current command</p>
+            <p className="supporter-copy">
+              Viewers type <strong>!checkin city</strong> in #{config.channel || 'channel'}.
+            </p>
+          </div>
+        </section>
+      </div>
+    </main>
+  );
+}

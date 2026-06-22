@@ -26,6 +26,18 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  white-space: nowrap;
+}
+
 html,
 body,
 #root {
@@ -979,6 +991,176 @@ textarea {
 
 .ghost-link:hover {
   color: var(--text);
+}
+
+.globe-settings-page .settings-header {
+  max-width: 760px;
+}
+
+.globe-settings-page strong {
+  color: var(--accent-strong);
+}
+
+.globe-link-panel h2 {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-size: clamp(1.7rem, 3vw, 2.5rem);
+  line-height: 1;
+}
+
+.globe-overlay-url {
+  width: 100%;
+  min-height: 128px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(4, 13, 23, 0.8);
+  color: var(--text);
+  padding: 14px 16px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.globe-preview-frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 260px;
+  overflow: hidden;
+  border: 1px solid rgba(196, 219, 245, 0.14);
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(76, 201, 240, 0.16), transparent 30%),
+    linear-gradient(145deg, #020711 0%, #071827 54%, #03070d 100%);
+}
+
+.globe-preview-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.globe-session-actions {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.globe-session-card {
+  border: 1px solid rgba(76, 201, 240, 0.2);
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(76, 201, 240, 0.08), transparent 44%),
+    rgba(8, 19, 31, 0.68);
+  padding: 16px;
+}
+
+body.globe-transparent-shell {
+  background: transparent;
+}
+
+.globe-overlay {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.globe-overlay.is-transparent {
+  background: transparent;
+}
+
+.globe-canvas {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.globe-canvas canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.globe-marker-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  max-width: min(320px, 42vw);
+  transform-origin: left center;
+  color: #f8fbff;
+  font-size: clamp(0.72rem, 1.2vw, 0.94rem);
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
+  transition: opacity 160ms ease;
+  white-space: nowrap;
+  will-change: transform, opacity;
+  translate: -50% -100%;
+}
+
+.globe-overlay-hud {
+  position: absolute;
+  top: 28px;
+  left: 32px;
+  display: grid;
+  gap: 6px;
+  max-width: min(420px, calc(100% - 64px));
+  pointer-events: none;
+}
+
+.globe-hud-title {
+  margin: 0;
+  color: var(--text);
+  font-family: "Barlow Condensed", "Arial Narrow", sans-serif;
+  font-size: clamp(2rem, 4.2vw, 4rem);
+  font-weight: 800;
+  line-height: 0.95;
+}
+
+.globe-hud-command {
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: clamp(0.86rem, 1.5vw, 1.1rem);
+  font-weight: 800;
+}
+
+.globe-status-bar {
+  position: absolute;
+  right: 28px;
+  bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, calc(100% - 56px));
+  border: 1px solid rgba(196, 219, 245, 0.16);
+  border-radius: 8px;
+  background: rgba(4, 13, 23, 0.68);
+  color: var(--muted);
+  padding: 10px 12px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.globe-status-bar span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.globe-status-bar strong {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 28px;
+  border-radius: 6px;
+  background: rgba(245, 182, 62, 0.16);
+  color: var(--accent-strong);
 }
 
 .preview-frame {

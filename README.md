@@ -4,14 +4,17 @@ Static React app for OBS/Twitch-friendly live sports score overlays, with a sett
 
 ## Scope
 
-- `index.html`: settings page
-- `overlay.html`: transparent overlay page
+- `index.html`: stream tools launcher
+- `game-score/`: game score settings and overlay pages
+- `globe/`: Twitch viewer check-in globe settings and overlay pages
+- `overlay.html`: legacy game score transparent overlay page
 - default mode is schedule-driven auto selection
 - optional team targeting in auto mode
 - manual game override
 - sport selection for NHL and soccer/football
 - NHL playoffs-only toggle
 - show clock toggle
+- Twitch `!checkin <location>` globe markers
 - Cloudflare Worker proxy for live sports schedule and score feeds
 
 ## Local development
@@ -91,8 +94,18 @@ git push
 - `/api/soccer/schedule/now`
 - `/api/soccer/score/now`
 - `/api/soccer/score/:date`
+- `/api/globe/checkins`
+- `/api/globe/sessions/:session/clear`
 
 The NHL routes proxy public NHL web endpoints. The soccer routes normalize ESPN soccer scoreboard responses into the app's shared game shape. All routes use short cache windows and permissive CORS for the GitHub Pages frontend.
+
+The globe routes store viewer check-ins in D1 and resolve locations through OpenStreetMap Nominatim with a D1 cache.
+
+Apply the globe schema with:
+
+```bash
+npx wrangler d1 execute sport-live-feed-analytics --remote --file worker/sql/globe.sql
+```
 
 ## Optional Twitch gate
 

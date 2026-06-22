@@ -70,6 +70,8 @@ export default defineConfig(({ command }) => {
           home: resolve(rootDir, 'index.html'),
           overlay: resolve(rootDir, 'overlay.html'),
           admin: resolve(rootDir, 'admin/index.html'),
+          globe: resolve(rootDir, 'globe/index.html'),
+          globeOverlay: resolve(rootDir, 'globe/overlay.html'),
           gameScore: resolve(rootDir, 'game-score/index.html'),
           gameScoreOverlay: resolve(rootDir, 'game-score/overlay.html'),
           liveGoalOverlay: resolve(rootDir, 'live-goal/overlay.html'),

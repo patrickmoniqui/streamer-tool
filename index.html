@@ -5,37 +5,132 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Keylight Stream Tools</title>
     <meta name="description" content="Keylight stream tools for OBS and browser sources." />
-    <script>
-      const pathname = window.location.pathname;
-      const pathSegments = pathname.split('/').filter(Boolean);
-      const trailingSegment = pathSegments[pathSegments.length - 1];
-      const needsDirectorySlash =
-        !pathname.endsWith('/') &&
-        ['admin', 'game-score'].includes(trailingSegment);
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: #08131f;
+        color: #f5f9ff;
+      }
 
-      if (needsDirectorySlash) {
-        const target = new URL(`${trailingSegment}/`, window.location.href);
-        target.search = window.location.search;
-        target.hash = window.location.hash;
-        window.location.replace(target.toString());
-      } else {
-        const normalizedPath = pathname.endsWith('/')
-          ? pathname
-          : `${pathname}/`;
-        const isKnownToolPath =
-          normalizedPath.includes('/game-score/') ||
-          normalizedPath.includes('/admin/');
+      * {
+        box-sizing: border-box;
+      }
 
-        if (!isKnownToolPath) {
-          const target = new URL('game-score/', window.location.href);
-          target.search = window.location.search;
-          target.hash = window.location.hash;
-          window.location.replace(target.toString());
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 15% 15%, rgba(245, 182, 62, 0.16), transparent 28%),
+          radial-gradient(circle at 85% 10%, rgba(76, 201, 240, 0.18), transparent 30%),
+          linear-gradient(145deg, #07121d 0%, #12253a 52%, #071623 100%);
+      }
+
+      main {
+        width: min(1040px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 56px 0;
+      }
+
+      .eyebrow {
+        margin: 0 0 10px;
+        color: #f5b63e;
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 760px;
+        font-size: clamp(2.4rem, 6vw, 4.8rem);
+        line-height: 0.95;
+      }
+
+      .intro {
+        max-width: 620px;
+        margin: 18px 0 34px;
+        color: #aac0d8;
+        font-size: 1.02rem;
+        line-height: 1.65;
+      }
+
+      .tool-grid {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .tool-card {
+        min-height: 220px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        border: 1px solid rgba(196, 219, 245, 0.16);
+        border-radius: 8px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 38%),
+          rgba(10, 25, 41, 0.82);
+        color: inherit;
+        padding: 24px;
+        text-decoration: none;
+      }
+
+      .tool-card:hover {
+        border-color: rgba(245, 182, 62, 0.46);
+        transform: translateY(-2px);
+      }
+
+      .tool-card h2 {
+        margin: 0 0 10px;
+        font-size: 1.7rem;
+      }
+
+      .tool-card p {
+        margin: 0;
+        color: #aac0d8;
+        line-height: 1.55;
+      }
+
+      .tool-action {
+        margin-top: 22px;
+        color: #ffcb67;
+        font-weight: 800;
+      }
+
+      @media (max-width: 760px) {
+        .tool-grid {
+          grid-template-columns: 1fr;
         }
       }
-    </script>
+    </style>
   </head>
   <body>
-    <p><a href="./game-score/">Open Game Score</a></p>
+    <main>
+      <p class="eyebrow">Keylight Stream Tools</p>
+      <h1>OBS-ready overlays for live streams</h1>
+      <p class="intro">
+        Configure browser-source tools for scoreboards, live reactions, and viewer
+        interaction.
+      </p>
+
+      <section class="tool-grid" aria-label="Stream tools">
+        <a class="tool-card" href="./game-score/">
+          <div>
+            <h2>Game Score</h2>
+            <p>Live sports score overlays for NHL and soccer streams.</p>
+          </div>
+          <span class="tool-action">Open settings</span>
+        </a>
+        <a class="tool-card" href="./globe/">
+          <div>
+            <h2>Globe Check-In</h2>
+            <p>Rotating Twitch viewer map powered by chat check-in commands.</p>
+          </div>
+          <span class="tool-action">Open settings</span>
+        </a>
+      </section>
+    </main>
   </body>
 </html>

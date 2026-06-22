@@ -198,6 +198,49 @@ interface AnalyticsTableColumnRow {
   name?: unknown;
 }
 
+interface GlobeCheckInPayload {
+  sessionId?: unknown;
+  viewerName?: unknown;
+  locationQuery?: unknown;
+}
+
+interface GlobeGeocodeResult {
+  displayLocation: string;
+  latitude: number;
+  longitude: number;
+  country: string | null;
+  region: string | null;
+}
+
+interface GlobeCheckInRecord {
+  id: string;
+  sessionId: string;
+  viewerName: string;
+  locationQuery: string;
+  displayLocation: string;
+  latitude: number;
+  longitude: number;
+  country?: string;
+  region?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface NominatimAddress {
+  country?: string;
+  state?: string;
+  province?: string;
+  region?: string;
+  county?: string;
+}
+
+interface NominatimSearchResult {
+  display_name?: string;
+  lat?: string;
+  lon?: string;
+  address?: NominatimAddress;
+}
+
 interface WorkerRequestCfProperties {
   asOrganization?: string | null;
   city?: string | null;
@@ -211,6 +254,10 @@ const ANALYTICS_EVENT_TYPES = new Set([
   'overlay_link_copied',
   'overlay_loaded',
   'live_goal_overlay_loaded',
+  'globe_settings_opened',
+  'globe_overlay_loaded',
+  'globe_link_copied',
+  'globe_marker_added',
 ]);
 const ANALYTICS_GOAL_ANIMATIONS = new Set(['logo-storm', 'jumbotron', 'logo-rain']);
 const ANALYTICS_LAYOUTS = new Set(['compact', 'stacked']);
@@ -246,6 +293,13 @@ function buildAnalyticsCorsHeaders(): Headers {
   const headers = buildPublicCorsHeaders();
   headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+  return headers;
+}
+
+function buildGlobeCorsHeaders(): Headers {
+  const headers = buildPublicCorsHeaders();
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Headers', 'Content-Type');
   return headers;
 }
 
@@ -1565,6 +1619,366 @@ async function handleAnalyticsSummary(
   }
 }
 
+async function ensureGlobeSchema(db: D1Database): Promise<void> {
+  await db.batch([
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS globe_geocode_cache (
+        query_key TEXT PRIMARY KEY,
+        query TEXT NOT NULL,
+        display_location TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        country TEXT,
+        region TEXT,
+        created_at INTEGER NOT NULL
+      )
+    `),
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS globe_checkins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        viewer_key TEXT NOT NULL,
+        viewer_name TEXT NOT NULL,
+        location_query TEXT NOT NULL,
+        display_location TEXT NOT NULL,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        country TEXT,
+        region TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(session_id, viewer_key)
+      )
+    `),
+    db.prepare(`
+      CREATE INDEX IF NOT EXISTS idx_globe_checkins_session_updated
+      ON globe_checkins(session_id, updated_at DESC)
+    `),
+  ]);
+}
+
+function normalizeGlobeInput(value: unknown, maxLength: number): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function normalizeGlobeSessionId(value: unknown): string | null {
+  const normalized = normalizeGlobeInput(value, 128);
+
+  if (!normalized || !/^[A-Za-z0-9._:-]+$/.test(normalized)) {
+    return null;
+  }
+
+  return normalized;
+}
+
+function normalizeGlobeCacheKey(query: string): string {
+  return query.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function mapGlobeCheckInRow(row: Record<string, unknown>): GlobeCheckInRecord {
+  return {
+    id: String(row.id),
+    sessionId: String(row.session_id),
+    viewerName: String(row.viewer_name),
+    locationQuery: String(row.location_query),
+    displayLocation: String(row.display_location),
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    country: typeof row.country === 'string' ? row.country : undefined,
+    region: typeof row.region === 'string' ? row.region : undefined,
+    createdAt: Number(row.created_at),
+    updatedAt: Number(row.updated_at),
+  };
+}
+
+async function readCachedGlobeGeocode(
+  db: D1Database,
+  queryKey: string,
+): Promise<GlobeGeocodeResult | null> {
+  const row = await db
+    .prepare(
+      `
+        SELECT display_location, latitude, longitude, country, region
+        FROM globe_geocode_cache
+        WHERE query_key = ?
+      `,
+    )
+    .bind(queryKey)
+    .first<Record<string, unknown>>();
+
+  if (!row) {
+    return null;
+  }
+
+  return {
+    displayLocation: String(row.display_location),
+    latitude: Number(row.latitude),
+    longitude: Number(row.longitude),
+    country: typeof row.country === 'string' ? row.country : null,
+    region: typeof row.region === 'string' ? row.region : null,
+  };
+}
+
+async function resolveGlobeLocation(
+  db: D1Database,
+  locationQuery: string,
+): Promise<GlobeGeocodeResult | null> {
+  const queryKey = normalizeGlobeCacheKey(locationQuery);
+  const cachedResult = await readCachedGlobeGeocode(db, queryKey);
+
+  if (cachedResult) {
+    return cachedResult;
+  }
+
+  const searchUrl = new URL('https://nominatim.openstreetmap.org/search');
+  searchUrl.searchParams.set('format', 'jsonv2');
+  searchUrl.searchParams.set('addressdetails', '1');
+  searchUrl.searchParams.set('limit', '1');
+  searchUrl.searchParams.set('q', locationQuery);
+
+  const response = await fetch(searchUrl.toString(), {
+    headers: {
+      Accept: 'application/json',
+      'Accept-Language': 'en',
+      'User-Agent': 'KeylightStreamTools/0.1 globe-checkin',
+    },
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const results = (await response.json()) as NominatimSearchResult[];
+  const result = Array.isArray(results) ? results[0] : null;
+  const latitude = Number(result?.lat);
+  const longitude = Number(result?.lon);
+
+  if (!result?.display_name || !Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return null;
+  }
+
+  const address = result.address ?? {};
+  const geocodeResult: GlobeGeocodeResult = {
+    displayLocation: result.display_name.slice(0, 160),
+    latitude,
+    longitude,
+    country: address.country?.slice(0, 80) ?? null,
+    region:
+      address.state?.slice(0, 80) ??
+      address.province?.slice(0, 80) ??
+      address.region?.slice(0, 80) ??
+      address.county?.slice(0, 80) ??
+      null,
+  };
+
+  await db
+    .prepare(
+      `
+        INSERT OR REPLACE INTO globe_geocode_cache (
+          query_key,
+          query,
+          display_location,
+          latitude,
+          longitude,
+          country,
+          region,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    )
+    .bind(
+      queryKey,
+      locationQuery,
+      geocodeResult.displayLocation,
+      geocodeResult.latitude,
+      geocodeResult.longitude,
+      geocodeResult.country,
+      geocodeResult.region,
+      Date.now(),
+    )
+    .run();
+
+  return geocodeResult;
+}
+
+async function fetchGlobeCheckIns(
+  db: D1Database,
+  sessionId: string,
+): Promise<GlobeCheckInRecord[]> {
+  const result = await db
+    .prepare(
+      `
+        SELECT
+          id,
+          session_id,
+          viewer_name,
+          location_query,
+          display_location,
+          latitude,
+          longitude,
+          country,
+          region,
+          created_at,
+          updated_at
+        FROM globe_checkins
+        WHERE session_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 250
+      `,
+    )
+    .bind(sessionId)
+    .all<Record<string, unknown>>();
+
+  return (result.results ?? []).map(mapGlobeCheckInRow);
+}
+
+async function handleGlobeCheckIns(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const headers = buildGlobeCorsHeaders();
+  const db = getAnalyticsDb(env);
+
+  if (!db) {
+    return jsonResponse({ error: 'D1 database is not configured.' }, headers, 503);
+  }
+
+  await ensureGlobeSchema(db);
+
+  if (request.method === 'GET') {
+    const url = new URL(request.url);
+    const sessionId = normalizeGlobeSessionId(url.searchParams.get('session'));
+
+    if (!sessionId) {
+      return jsonResponse({ error: 'Missing or invalid session.' }, headers, 400);
+    }
+
+    return jsonResponse(
+      { checkIns: await fetchGlobeCheckIns(db, sessionId) },
+      headers,
+    );
+  }
+
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed.' }, headers, 405);
+  }
+
+  let payload: GlobeCheckInPayload;
+
+  try {
+    payload = (await request.json()) as GlobeCheckInPayload;
+  } catch {
+    return jsonResponse({ error: 'Invalid JSON payload.' }, headers, 400);
+  }
+
+  const sessionId = normalizeGlobeSessionId(payload.sessionId);
+  const viewerName = normalizeGlobeInput(payload.viewerName, 48);
+  const locationQuery = normalizeGlobeInput(payload.locationQuery, 120);
+
+  if (!sessionId || !viewerName || !locationQuery) {
+    return jsonResponse({ error: 'Invalid check-in payload.' }, headers, 400);
+  }
+
+  const geocodeResult = await resolveGlobeLocation(db, locationQuery);
+
+  if (!geocodeResult) {
+    return jsonResponse({ error: 'Location not found.' }, headers, 404);
+  }
+
+  const now = Date.now();
+  const viewerKey = viewerName.toLowerCase();
+
+  await db
+    .prepare(
+      `
+        INSERT INTO globe_checkins (
+          session_id,
+          viewer_key,
+          viewer_name,
+          location_query,
+          display_location,
+          latitude,
+          longitude,
+          country,
+          region,
+          created_at,
+          updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id, viewer_key) DO UPDATE SET
+          viewer_name = excluded.viewer_name,
+          location_query = excluded.location_query,
+          display_location = excluded.display_location,
+          latitude = excluded.latitude,
+          longitude = excluded.longitude,
+          country = excluded.country,
+          region = excluded.region,
+          updated_at = excluded.updated_at
+      `,
+    )
+    .bind(
+      sessionId,
+      viewerKey,
+      viewerName,
+      locationQuery,
+      geocodeResult.displayLocation,
+      geocodeResult.latitude,
+      geocodeResult.longitude,
+      geocodeResult.country,
+      geocodeResult.region,
+      now,
+      now,
+    )
+    .run();
+
+  const checkIns = await fetchGlobeCheckIns(db, sessionId);
+  const checkIn = checkIns.find(
+    (record) => record.viewerName.toLowerCase() === viewerKey,
+  );
+
+  return jsonResponse({ checkIn: checkIn ?? null }, headers);
+}
+
+async function handleClearGlobeSession(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const headers = buildGlobeCorsHeaders();
+
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'Method not allowed.' }, headers, 405);
+  }
+
+  const db = getAnalyticsDb(env);
+
+  if (!db) {
+    return jsonResponse({ error: 'D1 database is not configured.' }, headers, 503);
+  }
+
+  const url = new URL(request.url);
+  const sessionId = normalizeGlobeSessionId(
+    decodeURIComponent(url.pathname.split('/').at(-2) ?? ''),
+  );
+
+  if (!sessionId) {
+    return jsonResponse({ error: 'Missing or invalid session.' }, headers, 400);
+  }
+
+  await ensureGlobeSchema(db);
+  await db
+    .prepare('DELETE FROM globe_checkins WHERE session_id = ?')
+    .bind(sessionId)
+    .run();
+
+  return jsonResponse({ ok: true }, headers);
+}
+
 async function proxyRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   let pathname = url.pathname.replace(/^\/api/, '');
@@ -1933,6 +2347,13 @@ export default {
         });
       }
 
+      if (url.pathname.startsWith('/api/globe/')) {
+        return new Response(null, {
+          status: 204,
+          headers: buildGlobeCorsHeaders(),
+        });
+      }
+
       return new Response(null, {
         status: 204,
         headers: buildPublicCorsHeaders(),
@@ -1965,6 +2386,17 @@ export default {
 
     if (url.pathname === '/api/analytics/summary') {
       return handleAnalyticsSummary(request, env);
+    }
+
+    if (url.pathname === '/api/globe/checkins') {
+      return handleGlobeCheckIns(request, env);
+    }
+
+    if (
+      url.pathname.startsWith('/api/globe/sessions/') &&
+      url.pathname.endsWith('/clear')
+    ) {
+      return handleClearGlobeSession(request, env);
     }
 
     return proxyRequest(request, env);
