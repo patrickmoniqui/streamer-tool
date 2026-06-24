@@ -656,7 +656,8 @@ export function SettingsPage() {
             />
             <small className="field-hint">
               Controls how often the overlay checks for score updates. The minimum
-              is {MIN_REFRESH_SECONDS}s to protect the Worker request budget.
+              is {MIN_REFRESH_SECONDS}s to protect the Worker request budget. Live
+              games temporarily check faster so goal animations appear sooner.
             </small>
           </div>
 

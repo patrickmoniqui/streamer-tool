@@ -5,6 +5,7 @@ import {
   buildMergedGames,
   getRefreshInterval,
   isFinalGame,
+  isLiveGame,
 } from './gameSelection';
 import type { DataSnapshot, OverlayConfig } from './types';
 
@@ -126,6 +127,7 @@ export function useOverlayData(config: OverlayConfig): OverlayDataState {
           displayMode: selection.displayMode,
           selectedGame: selection.selectedGame,
         };
+        const hasLiveSelection = selection.selectedGames.some(isLiveGame);
 
         setState({
           data: {
@@ -142,7 +144,7 @@ export function useOverlayData(config: OverlayConfig): OverlayDataState {
 
         timeoutId = window.setTimeout(
           loadData,
-          getRefreshInterval(config.refreshSeconds),
+          getRefreshInterval(config.refreshSeconds, hasLiveSelection),
         );
       } catch {
         if (cancelled) {

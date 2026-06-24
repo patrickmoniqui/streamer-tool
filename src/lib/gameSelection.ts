@@ -11,6 +11,7 @@ const LIVE_STATES = new Set(['LIVE', 'CRIT']);
 const UPCOMING_STATES = new Set(['PRE', 'FUT']);
 const FINAL_STATES = new Set(['FINAL', 'OFF']);
 const MAX_MULTI_GAMES = 4;
+const LIVE_REFRESH_SECONDS = 3;
 const LIVE_STATE_PRIORITY: Record<string, number> = {
   CRIT: 2,
   LIVE: 1,
@@ -258,7 +259,14 @@ export function selectGame(
   return buildGameSelection(config, games, now).selectedGame;
 }
 
-export function getRefreshInterval(refreshSeconds: number): number {
+export function getRefreshInterval(
+  refreshSeconds: number,
+  hasLiveSelection = false,
+): number {
+  if (hasLiveSelection) {
+    return LIVE_REFRESH_SECONDS * 1_000;
+  }
+
   return Math.max(MIN_REFRESH_SECONDS, refreshSeconds) * 1_000;
 }
 

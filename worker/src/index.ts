@@ -632,7 +632,7 @@ async function fetchAnalyticsBreakdown(
 
 function buildCacheTtl(pathname: string): number {
   if (pathname.includes('/score/')) {
-    return 10;
+    return 3;
   }
 
   return 30;
