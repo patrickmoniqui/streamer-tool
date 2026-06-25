@@ -104,6 +104,8 @@ export function GlobeSettingsPage() {
     'idle' | 'adding' | 'removing' | 'added' | 'removed' | 'empty' | 'failed'
   >('idle');
   const [localPreviewCheckIns, setLocalPreviewCheckIns] = useState<GlobeCheckIn[]>([]);
+  const [localGlobeRotationX, setLocalGlobeRotationX] = useState(0);
+  const [localGlobeRotationZ, setLocalGlobeRotationZ] = useState(0);
   const [testFocusCheckIn, setTestFocusCheckIn] = useState<{
     checkIn: GlobeCheckIn;
     requestId: number;
@@ -407,6 +409,40 @@ export function GlobeSettingsPage() {
           {canUseTestingTools ? (
             <div className="globe-test-tools">
               <p className="supporter-label">Local testing</p>
+              <label className="field">
+                <div className="field-header">
+                  <span>Globe X rotation</span>
+                  <span className="field-value">{localGlobeRotationX}°</span>
+                </div>
+                <input
+                  className="range-input"
+                  type="range"
+                  min="-45"
+                  max="45"
+                  step="1"
+                  value={localGlobeRotationX}
+                  onChange={(event) =>
+                    setLocalGlobeRotationX(Number(event.target.value))
+                  }
+                />
+              </label>
+              <label className="field">
+                <div className="field-header">
+                  <span>Globe Z rotation</span>
+                  <span className="field-value">{localGlobeRotationZ}°</span>
+                </div>
+                <input
+                  className="range-input"
+                  type="range"
+                  min="-45"
+                  max="45"
+                  step="1"
+                  value={localGlobeRotationZ}
+                  onChange={(event) =>
+                    setLocalGlobeRotationZ(Number(event.target.value))
+                  }
+                />
+              </label>
               <div className="globe-session-actions">
                 <button
                   className="secondary-button"
@@ -471,6 +507,8 @@ export function GlobeSettingsPage() {
               }}
               className="globe-preview-canvas"
               focusCheckIn={testFocusCheckIn}
+              globeTiltX={localGlobeRotationX * (Math.PI / 180)}
+              globeTiltZ={localGlobeRotationZ * (Math.PI / 180)}
               onFocusMarkerPlace={(checkIn) => {
                 setLocalPreviewCheckIns((current) => [
                   checkIn,

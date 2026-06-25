@@ -14,14 +14,18 @@ import {
 import { connectTwitchCheckInChat } from '../lib/twitchChat';
 
 const GLOBE_RADIUS = 1;
-const DEFAULT_CAMERA_Z = 3.25;
-const OVERLAY_CAMERA_Z = DEFAULT_CAMERA_Z / 0.8;
+const BASE_CAMERA_Z = 3.25;
+const MARKER_LABEL_RADIUS = 1.145;
+const MARKER_ENVELOPE_VIEWPORT_HEIGHT = 0.8;
+const DEFAULT_CAMERA_Z =
+  (BASE_CAMERA_Z * MARKER_LABEL_RADIUS) / MARKER_ENVELOPE_VIEWPORT_HEIGHT;
 const FOCUS_ROTATION_MS = 3_200;
 const FOCUS_HOLD_MS = 900;
 const FOCUS_RESUME_MS = 2_000;
 const GLOBE_TILT_X = 0;
 const INITIAL_GLOBE_YAW = -0.55;
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+const LOCAL_CHECK_IN_REFRESH_MS = 1_000;
 
 interface GlobeMarkerVisual {
   element?: HTMLDivElement;
@@ -98,9 +102,13 @@ function easeInOutCubic(value: number): number {
   );
 }
 
-function createGlobeOrientation(yaw: number): THREE.Quaternion {
+function createGlobeOrientation(
+  yaw: number,
+  tiltX = GLOBE_TILT_X,
+  tiltZ = 0,
+): THREE.Quaternion {
   return new THREE.Quaternion()
-    .setFromEuler(new THREE.Euler(GLOBE_TILT_X, yaw, 0, 'YXZ'));
+    .setFromEuler(new THREE.Euler(tiltX, yaw, tiltZ, 'YXZ'));
 }
 
 function getYawFromGlobeOrientation(quaternion: THREE.Quaternion): number {
@@ -581,6 +589,8 @@ export function GlobeScene({
   cameraDistance = DEFAULT_CAMERA_Z,
   className = '',
   focusCheckIn = null,
+  globeTiltX = GLOBE_TILT_X,
+  globeTiltZ = 0,
   onFocusMarkerPlace,
   onFocusComplete,
 }: {
@@ -589,6 +599,8 @@ export function GlobeScene({
   cameraDistance?: number;
   className?: string;
   focusCheckIn?: { checkIn: GlobeCheckIn; requestId: number } | null;
+  globeTiltX?: number;
+  globeTiltZ?: number;
   onFocusMarkerPlace?: (checkIn: GlobeCheckIn) => void;
   onFocusComplete?: (checkIn: GlobeCheckIn) => void;
 }) {
@@ -612,6 +624,8 @@ export function GlobeScene({
     targetQuaternion: THREE.Quaternion;
   } | null>(null);
   const placedFocusKeyRef = useRef<string | null>(null);
+  const globeTiltXRef = useRef(globeTiltX);
+  const globeTiltZRef = useRef(globeTiltZ);
   const rotationSpeedRef = useRef(config.rotationSpeed);
   const showLabelsRef = useRef(config.showLabels);
   const onFocusMarkerPlaceRef = useRef(onFocusMarkerPlace);
@@ -621,6 +635,11 @@ export function GlobeScene({
     rotationSpeedRef.current = config.rotationSpeed;
     showLabelsRef.current = config.showLabels;
   }, [config.rotationSpeed, config.showLabels]);
+
+  useEffect(() => {
+    globeTiltXRef.current = globeTiltX;
+    globeTiltZRef.current = globeTiltZ;
+  }, [globeTiltX, globeTiltZ]);
 
   useEffect(() => {
     onFocusMarkerPlaceRef.current = onFocusMarkerPlace;
@@ -637,7 +656,7 @@ export function GlobeScene({
     const sceneContainer = container;
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(34, 16 / 9, 0.1, 100);
-    camera.position.set(0, 0.08, cameraDistance);
+    camera.position.set(0, 0, cameraDistance);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({
@@ -662,7 +681,13 @@ export function GlobeScene({
     scene.add(rimLight);
 
     const globeGroup = new THREE.Group();
-    globeGroup.quaternion.copy(createGlobeOrientation(INITIAL_GLOBE_YAW));
+    globeGroup.quaternion.copy(
+      createGlobeOrientation(
+        INITIAL_GLOBE_YAW,
+        globeTiltXRef.current,
+        globeTiltZRef.current,
+      ),
+    );
     scene.add(globeGroup);
     globeGroupRef.current = globeGroup;
 
@@ -752,6 +777,8 @@ export function GlobeScene({
           createGlobeOrientation(
             getYawFromGlobeOrientation(globeGroup.quaternion) +
               rotationSpeedRef.current * 0.01,
+            globeTiltXRef.current,
+            globeTiltZRef.current,
           ),
         );
       }
@@ -883,7 +910,11 @@ export function GlobeScene({
     const startYaw = getYawFromGlobeOrientation(globeGroup.quaternion);
     const defaultRotationDuringFocus =
       rotationSpeedRef.current * 0.01 * (totalFocusDuration / (1000 / 60));
-    const resumeQuaternion = createGlobeOrientation(startYaw + defaultRotationDuringFocus);
+    const resumeQuaternion = createGlobeOrientation(
+      startYaw + defaultRotationDuringFocus,
+      globeTiltXRef.current,
+      globeTiltZRef.current,
+    );
     const targetQuaternion = getFocusQuaternionForLocation(
       focusCheckIn.checkIn.latitude,
       focusCheckIn.checkIn.longitude,
@@ -994,6 +1025,8 @@ function upsertCheckIn(checkIns: GlobeCheckIn[], nextCheckIn: GlobeCheckIn): Glo
 
 export function GlobeOverlayPage() {
   const config = useMemo(() => parseGlobeConfig(window.location.search), []);
+  const isLocalRuntime =
+    import.meta.env.DEV || LOCAL_HOSTNAMES.has(window.location.hostname);
   const [checkIns, setCheckIns] = useState<GlobeCheckIn[]>([]);
   const [focusCheckIn, setFocusCheckIn] = useState<{
     checkIn: GlobeCheckIn;
@@ -1001,12 +1034,17 @@ export function GlobeOverlayPage() {
   } | null>(null);
   const [status, setStatus] = useState('Starting globe');
   const checkInsRef = useRef<GlobeCheckIn[]>([]);
+  const focusCheckInRef = useRef<typeof focusCheckIn>(null);
   const pendingLocationsRef = useRef(new Set<string>());
   const focusRequestIdRef = useRef(0);
 
   useEffect(() => {
     checkInsRef.current = checkIns;
   }, [checkIns]);
+
+  useEffect(() => {
+    focusCheckInRef.current = focusCheckIn;
+  }, [focusCheckIn]);
 
   function focusExistingCheckIn(checkIn: GlobeCheckIn) {
     if (!config.animateCheckIns) {
@@ -1047,15 +1085,73 @@ export function GlobeOverlayPage() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let hasLoaded = false;
+    let requestInFlight = false;
 
-    void fetchGlobeCheckIns(config.sessionId, controller.signal)
-      .then((loadedCheckIns) => {
-        setCheckIns(loadedCheckIns.sort((a, b) => b.updatedAt - a.updatedAt));
-      })
-      .catch(() => setStatus('Unable to load saved check-ins.'));
+    async function refreshCheckIns() {
+      if (requestInFlight || focusCheckInRef.current) {
+        return;
+      }
 
-    return () => controller.abort();
-  }, [config.sessionId]);
+      requestInFlight = true;
+
+      try {
+        const loadedCheckIns = (
+          await fetchGlobeCheckIns(config.sessionId, controller.signal)
+        ).sort((a, b) => b.updatedAt - a.updatedAt);
+
+        if (!hasLoaded) {
+          hasLoaded = true;
+          setCheckIns(loadedCheckIns);
+          return;
+        }
+
+        const currentByViewer = new Map(
+          checkInsRef.current.map((checkIn) => [
+            checkIn.viewerName.toLowerCase(),
+            checkIn,
+          ]),
+        );
+        const changedCheckIn = loadedCheckIns.find((checkIn) => {
+          const current = currentByViewer.get(checkIn.viewerName.toLowerCase());
+          return !current || current.updatedAt < checkIn.updatedAt;
+        });
+
+        if (changedCheckIn && config.animateCheckIns) {
+          setCheckIns(
+            loadedCheckIns.filter(
+              (checkIn) =>
+                checkIn.viewerName.toLowerCase() !==
+                changedCheckIn.viewerName.toLowerCase(),
+            ),
+          );
+          focusExistingCheckIn(changedCheckIn);
+          return;
+        }
+
+        setCheckIns(loadedCheckIns);
+      } catch {
+        if (!controller.signal.aborted) {
+          setStatus('Unable to load saved check-ins.');
+        }
+      } finally {
+        requestInFlight = false;
+      }
+    }
+
+    void refreshCheckIns();
+    const intervalId = isLocalRuntime
+      ? window.setInterval(() => void refreshCheckIns(), LOCAL_CHECK_IN_REFRESH_MS)
+      : null;
+
+    return () => {
+      controller.abort();
+
+      if (intervalId !== null) {
+        window.clearInterval(intervalId);
+      }
+    };
+  }, [config.animateCheckIns, config.sessionId, isLocalRuntime]);
 
   useEffect(() => {
     return connectTwitchCheckInChat({
@@ -1111,7 +1207,6 @@ export function GlobeOverlayPage() {
       <GlobeScene
         checkIns={checkIns}
         config={config}
-        cameraDistance={OVERLAY_CAMERA_Z}
         focusCheckIn={focusCheckIn}
         onFocusMarkerPlace={(checkIn) => {
           setCheckIns((current) => upsertCheckIn(current, checkIn));
