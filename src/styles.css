@@ -81,6 +81,26 @@ textarea {
   margin-bottom: 32px;
 }
 
+.breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 22px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.breadcrumb-link:hover {
+  color: var(--text);
+}
+
+.breadcrumb-link span {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
 .admin-hero {
   max-width: 760px;
   margin-bottom: 28px;
@@ -1053,6 +1073,10 @@ textarea {
 
 .globe-test-tools .globe-session-actions {
   margin-top: 12px;
+}
+
+.globe-clear-button {
+  margin-top: 18px;
 }
 
 .globe-session-card {

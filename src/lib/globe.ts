@@ -27,21 +27,12 @@ export const DEFAULT_GLOBE_CONFIG: GlobeConfig = {
   animateCheckIns: false,
   channel: '',
   sessionId: '',
-  rotationSpeed: 0.14,
+  rotationSpeed: 1 / 15,
   showLabels: true,
   transparent: true,
 };
 
-const MIN_ROTATION_SPEED = 0;
-const MAX_ROTATION_SPEED = 0.6;
-
-function clampNumber(value: number, minimum: number, maximum: number): number {
-  if (!Number.isFinite(value)) {
-    return minimum;
-  }
-
-  return Math.min(maximum, Math.max(minimum, value));
-}
+const ROTATIONS_PER_SECOND_PER_SPEED_UNIT = 0.5;
 
 function parseBoolean(value: string | null, fallback: boolean): boolean {
   if (value === null) {
@@ -63,22 +54,29 @@ export function normalizeTwitchChannel(channel: string): string {
   return channel.trim().replace(/^#/, '').toLowerCase();
 }
 
+export function getGlobeRotationsPerSecond(rotationSpeed: number): number {
+  return rotationSpeed * ROTATIONS_PER_SECOND_PER_SPEED_UNIT;
+}
+
+export function getGlobeSessionId(
+  channel: string,
+  fallbackSessionId = '',
+): string {
+  return normalizeTwitchChannel(channel) || fallbackSessionId || createGlobeSessionId();
+}
+
 export function parseGlobeConfig(search: string): GlobeConfig {
   const params = new URLSearchParams(search);
-  const rotationSpeed = clampNumber(
-    Number(params.get('speed') ?? DEFAULT_GLOBE_CONFIG.rotationSpeed),
-    MIN_ROTATION_SPEED,
-    MAX_ROTATION_SPEED,
-  );
+  const channel = normalizeTwitchChannel(params.get('channel') ?? '');
 
   return {
     animateCheckIns: parseBoolean(
       params.get('animations'),
       DEFAULT_GLOBE_CONFIG.animateCheckIns,
     ),
-    channel: normalizeTwitchChannel(params.get('channel') ?? ''),
-    sessionId: params.get('session')?.trim() || createGlobeSessionId(),
-    rotationSpeed,
+    channel,
+    sessionId: getGlobeSessionId(channel, params.get('session')?.trim()),
+    rotationSpeed: DEFAULT_GLOBE_CONFIG.rotationSpeed,
     showLabels: parseBoolean(params.get('labels'), DEFAULT_GLOBE_CONFIG.showLabels),
     transparent: parseBoolean(
       params.get('transparent'),
@@ -88,17 +86,19 @@ export function parseGlobeConfig(search: string): GlobeConfig {
 }
 
 export function buildGlobeOverlayUrl(config: GlobeConfig): string {
-  const overlayUrl = new URL('./overlay.html', window.location.href);
+  const channel = normalizeTwitchChannel(config.channel);
+  const sessionId = getGlobeSessionId(channel, config.sessionId);
+  const overlayUrl = channel
+    ? new URL(`./${encodeURIComponent(channel)}`, window.location.href)
+    : new URL('./overlay.html', window.location.href);
 
-  overlayUrl.searchParams.set('session', config.sessionId);
+  if (!channel) {
+    overlayUrl.searchParams.set('session', sessionId);
+  }
+
   overlayUrl.searchParams.set('animations', config.animateCheckIns ? '1' : '0');
-  overlayUrl.searchParams.set('speed', config.rotationSpeed.toFixed(2));
   overlayUrl.searchParams.set('labels', config.showLabels ? '1' : '0');
   overlayUrl.searchParams.set('transparent', config.transparent ? '1' : '0');
-
-  if (config.channel) {
-    overlayUrl.searchParams.set('channel', normalizeTwitchChannel(config.channel));
-  }
 
   return overlayUrl.toString();
 }

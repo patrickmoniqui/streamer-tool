@@ -6,6 +6,7 @@ import type { GeometryCollection, Topology } from 'topojson-specification';
 import {
   clearGlobeSession,
   fetchGlobeCheckIns,
+  getGlobeRotationsPerSecond,
   parseGlobeConfig,
   submitGlobeCheckIn,
   type GlobeCheckIn,
@@ -26,6 +27,7 @@ const GLOBE_TILT_X = 0;
 const INITIAL_GLOBE_YAW = -0.55;
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 const LOCAL_CHECK_IN_REFRESH_MS = 1_000;
+let hiddenCountryBorderOpacity = 0.1;
 
 interface GlobeMarkerVisual {
   element?: HTMLDivElement;
@@ -243,11 +245,8 @@ function createCountryBorderMaterial(): THREE.ShaderMaterial {
       varying float vFacing;
 
       void main() {
-        if (vFacing <= 0.0) {
-          discard;
-        }
-
-        float alpha = smoothstep(0.02, 0.2, vFacing) * 0.82;
+        float visibility = mix(0.1, 1.0, smoothstep(0.0, 0.2, vFacing));
+        float alpha = visibility * 0.82;
         gl_FragColor = vec4(0.56, 0.86, 1.0, alpha);
       }
     `,
@@ -286,11 +285,8 @@ function createActiveCountryBorderMaterial(
       varying float vFacing;
 
       void main() {
-        if (vFacing <= 0.0) {
-          discard;
-        }
-
-        float alpha = smoothstep(0.02, 0.2, vFacing) * opacity;
+        float visibility = mix(0.1, 1.0, smoothstep(0.0, 0.2, vFacing));
+        float alpha = visibility * opacity;
         gl_FragColor = vec4(borderColor, alpha);
       }
     `,
@@ -728,7 +724,14 @@ export function GlobeScene({
     const cameraRotation = new THREE.Euler();
     let lastDebugUpdate = 0;
 
-    function renderFrame() {
+    let previousFrameTime = performance.now();
+
+    function renderFrame(frameTime: number) {
+      const deltaSeconds = Math.min(
+        Math.max((frameTime - previousFrameTime) / 1_000, 0),
+        0.1,
+      );
+      previousFrameTime = frameTime;
       const focusAnimation = focusAnimationRef.current;
 
       if (focusAnimation) {
@@ -773,10 +776,13 @@ export function GlobeScene({
           onFocusCompleteRef.current?.(focusAnimation.checkIn);
         }
       } else {
+        const rotationsPerSecond = getGlobeRotationsPerSecond(
+          rotationSpeedRef.current,
+        );
         globeGroup.quaternion.copy(
           createGlobeOrientation(
             getYawFromGlobeOrientation(globeGroup.quaternion) +
-              rotationSpeedRef.current * 0.01,
+              rotationsPerSecond * Math.PI * 2 * deltaSeconds,
             globeTiltXRef.current,
             globeTiltZRef.current,
           ),
@@ -908,8 +914,11 @@ export function GlobeScene({
     placedFocusKeyRef.current = focusKey;
     const totalFocusDuration = FOCUS_ROTATION_MS + FOCUS_HOLD_MS + FOCUS_RESUME_MS;
     const startYaw = getYawFromGlobeOrientation(globeGroup.quaternion);
+    const rotationsPerSecond = getGlobeRotationsPerSecond(
+      rotationSpeedRef.current,
+    );
     const defaultRotationDuringFocus =
-      rotationSpeedRef.current * 0.01 * (totalFocusDuration / (1000 / 60));
+      rotationsPerSecond * Math.PI * 2 * (totalFocusDuration / 1_000);
     const resumeQuaternion = createGlobeOrientation(
       startYaw + defaultRotationDuringFocus,
       globeTiltXRef.current,

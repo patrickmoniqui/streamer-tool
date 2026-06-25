@@ -352,6 +352,10 @@ export function SettingsPage() {
   return (
     <main className="settings-page">
       <section className="settings-header">
+        <a className="breadcrumb-link" href="../">
+          <span aria-hidden="true">←</span>
+          All tools
+        </a>
         <p className="eyebrow">Live Score Overlay</p>
         <h1>Set up your score overlay</h1>
         <p className="header-copy">

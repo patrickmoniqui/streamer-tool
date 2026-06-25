@@ -5,6 +5,7 @@ import {
   clearGlobeSession,
   createGlobeSessionId,
   fetchGlobeCheckIns,
+  getGlobeSessionId,
   normalizeTwitchChannel,
   removeGlobeCheckIn,
   submitGlobeCheckIn,
@@ -77,12 +78,14 @@ function loadStoredConfig(): GlobeConfig {
     }
 
     const parsed = JSON.parse(stored) as Partial<GlobeConfig>;
+    const channel = normalizeTwitchChannel(parsed.channel ?? '');
 
     return {
       ...DEFAULT_GLOBE_CONFIG,
       ...parsed,
-      channel: normalizeTwitchChannel(parsed.channel ?? ''),
-      sessionId: parsed.sessionId || createGlobeSessionId(),
+      channel,
+      rotationSpeed: DEFAULT_GLOBE_CONFIG.rotationSpeed,
+      sessionId: getGlobeSessionId(channel, parsed.sessionId),
     };
   } catch {
     return {
@@ -161,17 +164,6 @@ export function GlobeSettingsPage() {
     } catch {
       setCopyStatus('failed');
     }
-  }
-
-  function startNewSession() {
-    setConfig((current) => ({
-      ...current,
-      sessionId: createGlobeSessionId(),
-    }));
-    setClearStatus('idle');
-    setTestStatus('idle');
-    setLocalPreviewCheckIns([]);
-    setTestFocusCheckIn(null);
   }
 
   async function clearCurrentSession() {
@@ -265,6 +257,10 @@ export function GlobeSettingsPage() {
   return (
     <main className="settings-page globe-settings-page">
       <header className="settings-header">
+        <a className="breadcrumb-link" href="../">
+          <span aria-hidden="true">←</span>
+          All tools
+        </a>
         <p className="eyebrow">Keylight Stream Tools</p>
         <h1>Globe Check-In</h1>
         <p className="header-copy">
@@ -275,9 +271,6 @@ export function GlobeSettingsPage() {
         <div className="header-meta">
           <a className="ghost-link" href="../game-score/">
             Game Score
-          </a>
-          <a className="ghost-link" href="../">
-            All tools
           </a>
         </div>
       </header>
@@ -290,38 +283,26 @@ export function GlobeSettingsPage() {
               className="admin-input"
               value={config.channel}
               placeholder="djmoneykey"
-              onChange={(event) =>
+              onChange={(event) => {
+                const channel = normalizeTwitchChannel(event.target.value);
                 setConfig((current) => ({
                   ...current,
-                  channel: normalizeTwitchChannel(event.target.value),
-                }))
-              }
+                  channel,
+                  sessionId: getGlobeSessionId(
+                    channel,
+                    current.channel ? '' : current.sessionId,
+                  ),
+                }));
+                setClearStatus('idle');
+                setTestStatus('idle');
+                setLocalPreviewCheckIns([]);
+                setTestFocusCheckIn(null);
+              }}
             />
             <span className="field-hint">
-              Use the channel login only. The overlay listens anonymously for
-              public chat messages.
+              Use the channel login only. It identifies the channel's shared globe
+              session and listens anonymously for public chat messages.
             </span>
-          </label>
-
-          <label className="field">
-            <div className="field-header">
-              <span>Rotation speed</span>
-              <span className="field-value">{config.rotationSpeed.toFixed(2)}</span>
-            </div>
-            <input
-              className="range-input"
-              type="range"
-              min="0"
-              max="0.6"
-              step="0.02"
-              value={config.rotationSpeed}
-              onChange={(event) =>
-                setConfig((current) => ({
-                  ...current,
-                  rotationSpeed: Number(event.target.value),
-                }))
-              }
-            />
           </label>
 
           <label className="toggle">
@@ -385,19 +366,14 @@ export function GlobeSettingsPage() {
             Transparent OBS background
           </label>
 
-          <div className="globe-session-actions">
-            <button className="secondary-button" type="button" onClick={startNewSession}>
-              New session
-            </button>
-            <button
-              className="secondary-button"
-              type="button"
-              disabled={clearStatus === 'clearing'}
-              onClick={clearCurrentSession}
-            >
-              {clearStatus === 'clearing' ? 'Clearing' : 'Clear markers'}
-            </button>
-          </div>
+          <button
+            className="secondary-button full-width-button globe-clear-button"
+            type="button"
+            disabled={clearStatus === 'clearing'}
+            onClick={clearCurrentSession}
+          >
+            {clearStatus === 'clearing' ? 'Clearing' : 'Clear channel markers'}
+          </button>
 
           {clearStatus === 'failed' ? (
             <p className="helper-text helper-error">Unable to clear this session.</p>
@@ -484,8 +460,8 @@ export function GlobeSettingsPage() {
             <p className="eyebrow">OBS Browser Source</p>
             <h2>Overlay URL</h2>
             <p className="header-copy">
-              Add this URL as a browser source. Keep the session ID private if you
-              want to control when the map resets.
+              Add this URL as a browser source. Every overlay using the same Twitch
+              channel shares one globe and marker list.
             </p>
           </div>
           <textarea className="globe-overlay-url" readOnly value={overlayUrl} rows={5} />

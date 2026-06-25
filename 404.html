@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Opening stream tool</title>
+  </head>
+  <body>
+    <script>
+      const match = window.location.pathname.match(
+        /^(.*\/globe)\/([A-Za-z0-9_]+)\/?$/,
+      );
+
+      if (match) {
+        const target = new URL(`${match[1]}/overlay.html`, window.location.origin);
+        target.search = window.location.search;
+        target.searchParams.set('channel', match[2].toLowerCase());
+        target.searchParams.delete('speed');
+        window.location.replace(target.toString());
+      } else {
+        window.location.replace('/');
+      }
+    </script>
+  </body>
+</html>

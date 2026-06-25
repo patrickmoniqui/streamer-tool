@@ -39,7 +39,30 @@ export default defineConfig(({ command }) => {
       __APP_VERSION__: JSON.stringify(packageJson.version),
       __APP_BUILD_NUMBER__: JSON.stringify(buildNumber),
     },
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: 'globe-channel-route',
+        configureServer(server) {
+          server.middlewares.use((request, response, next) => {
+            const requestUrl = new URL(request.url ?? '/', 'http://localhost');
+            const match = requestUrl.pathname.match(/^\/globe\/([A-Za-z0-9_]+)\/?$/);
+
+            if (!match) {
+              next();
+              return;
+            }
+
+            requestUrl.pathname = '/globe/overlay.html';
+            requestUrl.searchParams.set('channel', match[1].toLowerCase());
+            requestUrl.searchParams.delete('speed');
+            response.statusCode = 302;
+            response.setHeader('Location', `${requestUrl.pathname}${requestUrl.search}`);
+            response.end();
+          });
+        },
+      },
+    ],
     server: {
       host: true,
       port: 5173,
@@ -75,6 +98,7 @@ export default defineConfig(({ command }) => {
           gameScore: resolve(rootDir, 'game-score/index.html'),
           gameScoreOverlay: resolve(rootDir, 'game-score/overlay.html'),
           liveGoalOverlay: resolve(rootDir, 'live-goal/overlay.html'),
+          notFound: resolve(rootDir, '404.html'),
         },
       },
     },
