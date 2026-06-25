@@ -298,7 +298,7 @@ function buildAnalyticsCorsHeaders(): Headers {
 
 function buildGlobeCorsHeaders(): Headers {
   const headers = buildPublicCorsHeaders();
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'DELETE, GET, POST, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Content-Type');
   return headers;
 }
@@ -1863,6 +1863,32 @@ async function handleGlobeCheckIns(
       { checkIns: await fetchGlobeCheckIns(db, sessionId) },
       headers,
     );
+  }
+
+  if (request.method === 'DELETE') {
+    let payload: GlobeCheckInPayload;
+
+    try {
+      payload = (await request.json()) as GlobeCheckInPayload;
+    } catch {
+      return jsonResponse({ error: 'Invalid JSON payload.' }, headers, 400);
+    }
+
+    const sessionId = normalizeGlobeSessionId(payload.sessionId);
+    const viewerName = normalizeGlobeInput(payload.viewerName, 48);
+
+    if (!sessionId || !viewerName) {
+      return jsonResponse({ error: 'Invalid check-in payload.' }, headers, 400);
+    }
+
+    await db
+      .prepare(
+        'DELETE FROM globe_checkins WHERE session_id = ? AND viewer_key = ?',
+      )
+      .bind(sessionId, viewerName.toLowerCase())
+      .run();
+
+    return jsonResponse({ ok: true }, headers);
   }
 
   if (request.method !== 'POST') {

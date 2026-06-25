@@ -1,16 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_GLOBE_CONFIG,
   buildGlobeOverlayUrl,
   clearGlobeSession,
   createGlobeSessionId,
+  fetchGlobeCheckIns,
   normalizeTwitchChannel,
+  removeGlobeCheckIn,
+  submitGlobeCheckIn,
   type GlobeCheckIn,
   type GlobeConfig,
 } from '../lib/globe';
 import { GlobeScene } from './GlobeOverlayPage';
 
 const STORAGE_KEY = 'keylight-globe-settings';
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+const TEST_LOCATIONS = [
+  'Montreal, Canada',
+  'London, United Kingdom',
+  'Tokyo, Japan',
+  'Sydney, Australia',
+  'Sao Paulo, Brazil',
+  'Cape Town, South Africa',
+];
+const TEST_VIEWER_PREFIX = 'TestViewer';
 const PREVIEW_CHECK_INS: GlobeCheckIn[] = [
   {
     id: 'preview-montreal',
@@ -80,16 +93,46 @@ function loadStoredConfig(): GlobeConfig {
 }
 
 export function GlobeSettingsPage() {
+  const canUseTestingTools =
+    import.meta.env.DEV || LOCAL_HOSTNAMES.has(window.location.hostname);
   const [config, setConfig] = useState<GlobeConfig>(() => loadStoredConfig());
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [clearStatus, setClearStatus] = useState<'idle' | 'clearing' | 'cleared' | 'failed'>(
     'idle',
   );
+  const [testStatus, setTestStatus] = useState<
+    'idle' | 'adding' | 'removing' | 'added' | 'removed' | 'empty' | 'failed'
+  >('idle');
+  const [localPreviewCheckIns, setLocalPreviewCheckIns] = useState<GlobeCheckIn[]>([]);
+  const [testFocusCheckIn, setTestFocusCheckIn] = useState<{
+    checkIn: GlobeCheckIn;
+    requestId: number;
+  } | null>(null);
+  const testFocusRequestIdRef = useRef(0);
   const overlayUrl = useMemo(() => buildGlobeOverlayUrl(config), [config]);
+  const previewCheckIns = canUseTestingTools ? localPreviewCheckIns : PREVIEW_CHECK_INS;
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }, [config]);
+
+  useEffect(() => {
+    if (!canUseTestingTools) {
+      return;
+    }
+
+    const controller = new AbortController();
+
+    void fetchGlobeCheckIns(config.sessionId, controller.signal)
+      .then(setLocalPreviewCheckIns)
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setTestStatus('failed');
+        }
+      });
+
+    return () => controller.abort();
+  }, [canUseTestingTools, config.sessionId]);
 
   useEffect(() => {
     if (copyStatus === 'idle') {
@@ -124,6 +167,9 @@ export function GlobeSettingsPage() {
       sessionId: createGlobeSessionId(),
     }));
     setClearStatus('idle');
+    setTestStatus('idle');
+    setLocalPreviewCheckIns([]);
+    setTestFocusCheckIn(null);
   }
 
   async function clearCurrentSession() {
@@ -132,8 +178,85 @@ export function GlobeSettingsPage() {
     try {
       await clearGlobeSession(config.sessionId);
       setClearStatus('cleared');
+      setLocalPreviewCheckIns([]);
+      setTestFocusCheckIn(null);
     } catch {
       setClearStatus('failed');
+    }
+  }
+
+  async function addTestUser() {
+    setTestStatus('adding');
+
+    try {
+      const checkIns = await fetchGlobeCheckIns(config.sessionId);
+      const usedNumbers = new Set(
+        checkIns
+          .map((checkIn) => {
+            const match = checkIn.viewerName.match(/^TestViewer(\d+)$/);
+            return match ? Number(match[1]) : null;
+          })
+          .filter((value): value is number => value !== null),
+      );
+      let testNumber = 1;
+
+      while (usedNumbers.has(testNumber)) {
+        testNumber += 1;
+      }
+
+      const location = TEST_LOCATIONS[(testNumber - 1) % TEST_LOCATIONS.length];
+      const checkIn = await submitGlobeCheckIn(
+        config.sessionId,
+        `${TEST_VIEWER_PREFIX}${testNumber}`,
+        location,
+      );
+
+      if (checkIn) {
+        if (config.animateCheckIns) {
+          testFocusRequestIdRef.current += 1;
+          setTestFocusCheckIn({
+            checkIn,
+            requestId: testFocusRequestIdRef.current,
+          });
+        } else {
+          setLocalPreviewCheckIns((current) => [
+            checkIn,
+            ...current.filter(
+              (existing) =>
+                existing.viewerName.toLowerCase() !== checkIn.viewerName.toLowerCase(),
+            ),
+          ]);
+          setTestStatus('added');
+        }
+      } else {
+        setTestStatus('failed');
+      }
+    } catch {
+      setTestStatus('failed');
+    }
+  }
+
+  async function removeTestUser() {
+    setTestStatus('removing');
+
+    try {
+      const checkIns = await fetchGlobeCheckIns(config.sessionId);
+      const testCheckIn = checkIns.find((checkIn) =>
+        checkIn.viewerName.startsWith(TEST_VIEWER_PREFIX),
+      );
+
+      if (!testCheckIn) {
+        setTestStatus('empty');
+        return;
+      }
+
+      await removeGlobeCheckIn(config.sessionId, testCheckIn.viewerName);
+      setLocalPreviewCheckIns((current) =>
+        current.filter((checkIn) => checkIn.id !== testCheckIn.id),
+      );
+      setTestStatus('removed');
+    } catch {
+      setTestStatus('failed');
     }
   }
 
@@ -216,6 +339,39 @@ export function GlobeSettingsPage() {
           <label className="toggle">
             <input
               type="checkbox"
+              checked={config.animateCheckIns}
+              onChange={(event) => {
+                const animateCheckIns = event.target.checked;
+                setConfig((current) => ({
+                  ...current,
+                  animateCheckIns,
+                }));
+
+                if (!animateCheckIns) {
+                  setTestFocusCheckIn((current) => {
+                    if (current) {
+                      setLocalPreviewCheckIns((checkIns) => [
+                        current.checkIn,
+                        ...checkIns.filter(
+                          (existing) =>
+                            existing.viewerName.toLowerCase() !==
+                            current.checkIn.viewerName.toLowerCase(),
+                        ),
+                      ]);
+                      setTestStatus('added');
+                    }
+
+                    return null;
+                  });
+                }
+              }}
+            />
+            Animate new check-ins
+          </label>
+
+          <label className="toggle">
+            <input
+              type="checkbox"
               checked={config.transparent}
               onChange={(event) =>
                 setConfig((current) => ({
@@ -247,6 +403,44 @@ export function GlobeSettingsPage() {
           {clearStatus === 'cleared' ? (
             <p className="helper-text">Current session markers cleared.</p>
           ) : null}
+
+          {canUseTestingTools ? (
+            <div className="globe-test-tools">
+              <p className="supporter-label">Local testing</p>
+              <div className="globe-session-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={testStatus === 'adding' || testStatus === 'removing'}
+                  onClick={addTestUser}
+                >
+                  {testStatus === 'adding' ? 'Adding' : 'Add test user'}
+                </button>
+                <button
+                  className="secondary-button"
+                  type="button"
+                  disabled={testStatus === 'adding' || testStatus === 'removing'}
+                  onClick={removeTestUser}
+                >
+                  {testStatus === 'removing' ? 'Removing' : 'Remove test user'}
+                </button>
+              </div>
+              {testStatus === 'added' ? (
+                <p className="helper-text">Test user added to this session.</p>
+              ) : null}
+              {testStatus === 'removed' ? (
+                <p className="helper-text">Newest test user removed.</p>
+              ) : null}
+              {testStatus === 'empty' ? (
+                <p className="helper-text">No test users remain.</p>
+              ) : null}
+              {testStatus === 'failed' ? (
+                <p className="helper-text helper-error">
+                  Unable to update test users.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
         </section>
 
         <section className="preview-panel globe-link-panel">
@@ -269,19 +463,38 @@ export function GlobeSettingsPage() {
           ) : null}
           <div className="globe-preview-frame" aria-label="Globe overlay preview">
             <GlobeScene
-              checkIns={PREVIEW_CHECK_INS}
+              checkIns={previewCheckIns}
               config={{
                 ...config,
                 showLabels: config.showLabels,
                 transparent: false,
               }}
               className="globe-preview-canvas"
+              focusCheckIn={testFocusCheckIn}
+              onFocusMarkerPlace={(checkIn) => {
+                setLocalPreviewCheckIns((current) => [
+                  checkIn,
+                  ...current.filter(
+                    (existing) =>
+                      existing.viewerName.toLowerCase() !==
+                      checkIn.viewerName.toLowerCase(),
+                  ),
+                ]);
+                setTestStatus('added');
+              }}
+              onFocusComplete={(checkIn) => {
+                setTestFocusCheckIn((current) =>
+                  current?.checkIn.id === checkIn.id ? null : current,
+                );
+              }}
             />
           </div>
           <div className="globe-session-card">
             <p className="supporter-label">Current command</p>
             <p className="supporter-copy">
               Viewers type <strong>!checkin city</strong> in #{config.channel || 'channel'}.
+              The broadcaster can clear the globe with{' '}
+              <strong>!checkin reset</strong>.
             </p>
           </div>
         </section>

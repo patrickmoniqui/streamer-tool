@@ -12,19 +12,37 @@ interface TwitchChatClientOptions {
 
 const TWITCH_CHAT_URL = 'wss://irc-ws.chat.twitch.tv:443';
 const CHECKIN_PREFIX = '!checkin';
-const RESET_COMMAND = '!globe reset';
+const RESET_COMMANDS = new Set(['!checkin reset', '!globe reset']);
 
-function parseDisplayName(tags: string, fallback: string): string {
-  const displayNameTag = tags
-    .split(';')
-    .find((tag) => tag.startsWith('display-name='))
-    ?.slice('display-name='.length);
+function parseTags(rawTags: string): Map<string, string> {
+  return new Map(
+    rawTags.split(';').map((tag) => {
+      const separatorIndex = tag.indexOf('=');
 
-  return displayNameTag?.trim() || fallback;
+      if (separatorIndex === -1) {
+        return [tag, ''];
+      }
+
+      return [tag.slice(0, separatorIndex), tag.slice(separatorIndex + 1)];
+    }),
+  );
+}
+
+function isBroadcaster(
+  tags: Map<string, string>,
+  login: string,
+  channel: string,
+): boolean {
+  const badges = tags.get('badges')?.split(',') ?? [];
+  return (
+    login.toLowerCase() === channel ||
+    badges.some((badge) => badge === 'broadcaster/1')
+  );
 }
 
 function parsePrivMsg(
   rawMessage: string,
+  channel: string,
 ): { checkIn?: TwitchCheckInCommand; resetViewerName?: string } | null {
   const match = rawMessage.match(/^@([^ ]+) :([^!]+)![^ ]+ PRIVMSG #[^ ]+ :(.+)$/);
 
@@ -32,14 +50,15 @@ function parsePrivMsg(
     return null;
   }
 
-  const [, tags, login, message] = match;
+  const [, rawTags, login, message] = match;
+  const tags = parseTags(rawTags);
   const trimmedMessage = message.trim();
-  const viewerName = parseDisplayName(tags, login);
+  const viewerName = tags.get('display-name')?.trim() || login;
 
-  if (trimmedMessage.toLowerCase() === RESET_COMMAND) {
-    return {
-      resetViewerName: viewerName,
-    };
+  if (RESET_COMMANDS.has(trimmedMessage.toLowerCase())) {
+    return isBroadcaster(tags, login, channel)
+      ? { resetViewerName: viewerName }
+      : null;
   }
 
   if (
@@ -97,7 +116,7 @@ export function connectTwitchCheckInChat({
         continue;
       }
 
-      const command = parsePrivMsg(message);
+      const command = parsePrivMsg(message, normalizedChannel);
 
       if (command?.checkIn) {
         onCheckIn(command.checkIn);

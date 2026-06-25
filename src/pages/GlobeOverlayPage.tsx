@@ -15,15 +15,19 @@ import { connectTwitchCheckInChat } from '../lib/twitchChat';
 
 const GLOBE_RADIUS = 1;
 const DEFAULT_CAMERA_Z = 3.25;
+const OVERLAY_CAMERA_Z = DEFAULT_CAMERA_Z / 0.8;
 const FOCUS_ROTATION_MS = 3_200;
 const FOCUS_HOLD_MS = 900;
 const FOCUS_RESUME_MS = 2_000;
-const GLOBE_TILT_X = -0.28;
+const GLOBE_TILT_X = 0;
 const INITIAL_GLOBE_YAW = -0.55;
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-interface GlobeMarkerLabel {
-  element: HTMLDivElement;
-  position: THREE.Vector3;
+interface GlobeMarkerVisual {
+  element?: HTMLDivElement;
+  labelPosition?: THREE.Vector3;
+  objects: THREE.Object3D[];
+  surfacePosition: THREE.Vector3;
 }
 
 interface GlobeMarkerPosition {
@@ -101,6 +105,16 @@ function createGlobeOrientation(yaw: number): THREE.Quaternion {
 
 function getYawFromGlobeOrientation(quaternion: THREE.Quaternion): number {
   return new THREE.Euler().setFromQuaternion(quaternion, 'YXZ').y;
+}
+
+function formatVector(vector: THREE.Vector3): string {
+  return `x ${vector.x.toFixed(3)}  y ${vector.y.toFixed(3)}  z ${vector.z.toFixed(3)}`;
+}
+
+function formatRotation(rotation: THREE.Euler): string {
+  return `x ${THREE.MathUtils.radToDeg(rotation.x).toFixed(1)}°  y ${THREE.MathUtils.radToDeg(
+    rotation.y,
+  ).toFixed(1)}°  z ${THREE.MathUtils.radToDeg(rotation.z).toFixed(1)}°`;
 }
 
 function getFocusQuaternionForLocation(latitude: number, longitude: number): THREE.Quaternion {
@@ -564,6 +578,7 @@ function disposeGroup(group: THREE.Group): void {
 export function GlobeScene({
   checkIns,
   config,
+  cameraDistance = DEFAULT_CAMERA_Z,
   className = '',
   focusCheckIn = null,
   onFocusMarkerPlace,
@@ -571,13 +586,17 @@ export function GlobeScene({
 }: {
   checkIns: GlobeCheckIn[];
   config: GlobeConfig;
+  cameraDistance?: number;
   className?: string;
   focusCheckIn?: { checkIn: GlobeCheckIn; requestId: number } | null;
   onFocusMarkerPlace?: (checkIn: GlobeCheckIn) => void;
   onFocusComplete?: (checkIn: GlobeCheckIn) => void;
 }) {
+  const showDebugInfo =
+    import.meta.env.DEV || LOCAL_HOSTNAMES.has(window.location.hostname);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const labelsRef = useRef<GlobeMarkerLabel[]>([]);
+  const debugInfoRef = useRef<HTMLPreElement | null>(null);
+  const markerVisualsRef = useRef<GlobeMarkerVisual[]>([]);
   const markerGroupRef = useRef<THREE.Group | null>(null);
   const fillGroupRef = useRef<THREE.Group | null>(null);
   const activeCountryBorderGroupRef = useRef<THREE.Group | null>(null);
@@ -618,7 +637,7 @@ export function GlobeScene({
     const sceneContainer = container;
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(34, 16 / 9, 0.1, 100);
-    camera.position.set(0, 0.08, DEFAULT_CAMERA_Z);
+    camera.position.set(0, 0.08, cameraDistance);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({
@@ -672,6 +691,18 @@ export function GlobeScene({
       camera.updateProjectionMatrix();
     }
 
+    const rendererSize = new THREE.Vector2();
+    const globeCenter = new THREE.Vector3();
+    const cameraPosition = new THREE.Vector3();
+    const worldSurfacePosition = new THREE.Vector3();
+    const surfaceNormal = new THREE.Vector3();
+    const cameraDirection = new THREE.Vector3();
+    const projectedLabelPosition = new THREE.Vector3();
+    const globePosition = new THREE.Vector3();
+    const globeRotation = new THREE.Euler();
+    const cameraRotation = new THREE.Euler();
+    let lastDebugUpdate = 0;
+
     function renderFrame() {
       const focusAnimation = focusAnimationRef.current;
 
@@ -686,10 +717,10 @@ export function GlobeScene({
             focusAnimation.targetQuaternion,
             progress,
           );
-          camera.position.z = DEFAULT_CAMERA_Z;
+          camera.position.z = cameraDistance;
         } else if (elapsed <= FOCUS_ROTATION_MS + FOCUS_HOLD_MS) {
           globeGroup.quaternion.copy(focusAnimation.targetQuaternion);
-          camera.position.z = DEFAULT_CAMERA_Z;
+          camera.position.z = cameraDistance;
 
           if (!focusAnimation.markerPlaced) {
             focusAnimation.markerPlaced = true;
@@ -704,14 +735,14 @@ export function GlobeScene({
             focusAnimation.resumeQuaternion,
             progress,
           );
-          camera.position.z = DEFAULT_CAMERA_Z;
+          camera.position.z = cameraDistance;
         } else {
           if (!focusAnimation.markerPlaced) {
             focusAnimation.markerPlaced = true;
             onFocusMarkerPlaceRef.current?.(focusAnimation.checkIn);
           }
 
-          camera.position.z = DEFAULT_CAMERA_Z;
+          camera.position.z = cameraDistance;
           globeGroup.quaternion.copy(focusAnimation.resumeQuaternion);
           focusAnimationRef.current = null;
           onFocusCompleteRef.current?.(focusAnimation.checkIn);
@@ -727,16 +758,53 @@ export function GlobeScene({
 
       globeGroup.updateMatrixWorld();
 
-      const rendererSize = renderer.getSize(new THREE.Vector2());
+      renderer.getSize(rendererSize);
+      globeCenter.setFromMatrixPosition(globeGroup.matrixWorld);
+      camera.getWorldPosition(cameraPosition);
 
-      for (const label of labelsRef.current) {
-        const worldPosition = label.position.clone().applyMatrix4(globeGroup.matrixWorld);
-        const projected = worldPosition.clone().project(camera);
-        const visible = showLabelsRef.current && worldPosition.z > -0.08;
-        label.element.style.opacity = visible ? '1' : '0';
-        label.element.style.transform = `translate3d(${
-          (projected.x * 0.5 + 0.5) * rendererSize.x
-        }px, ${(-projected.y * 0.5 + 0.5) * rendererSize.y}px, 0)`;
+      if (
+        showDebugInfo &&
+        debugInfoRef.current &&
+        performance.now() - lastDebugUpdate >= 100
+      ) {
+        globeGroup.getWorldPosition(globePosition);
+        globeRotation.setFromQuaternion(globeGroup.quaternion, 'YXZ');
+        cameraRotation.setFromQuaternion(camera.quaternion, 'YXZ');
+        debugInfoRef.current.textContent = [
+          `Globe position  ${formatVector(globePosition)}`,
+          `Globe rotation  ${formatRotation(globeRotation)}`,
+          `Camera position ${formatVector(cameraPosition)}`,
+          `Camera rotation ${formatRotation(cameraRotation)}`,
+        ].join('\n');
+        lastDebugUpdate = performance.now();
+      }
+
+      for (const markerVisual of markerVisualsRef.current) {
+        worldSurfacePosition
+          .copy(markerVisual.surfacePosition)
+          .applyMatrix4(globeGroup.matrixWorld);
+        surfaceNormal.copy(worldSurfacePosition).sub(globeCenter).normalize();
+        cameraDirection.copy(cameraPosition).sub(worldSurfacePosition).normalize();
+        const isFrontFacing = surfaceNormal.dot(cameraDirection) > 0;
+
+        markerVisual.objects.forEach((object) => {
+          object.visible = isFrontFacing;
+        });
+
+        if (!markerVisual.element || !markerVisual.labelPosition) {
+          continue;
+        }
+
+        projectedLabelPosition
+          .copy(markerVisual.labelPosition)
+          .applyMatrix4(globeGroup.matrixWorld);
+        projectedLabelPosition.project(camera);
+        const labelVisible = showLabelsRef.current && isFrontFacing;
+        markerVisual.element.style.opacity = labelVisible ? '1' : '0';
+        markerVisual.element.style.visibility = labelVisible ? 'visible' : 'hidden';
+        markerVisual.element.style.transform = `translate3d(${
+          (projectedLabelPosition.x * 0.5 + 0.5) * rendererSize.x
+        }px, ${(-projectedLabelPosition.y * 0.5 + 0.5) * rendererSize.y}px, 0)`;
       }
 
       renderer.render(scene, camera);
@@ -750,8 +818,8 @@ export function GlobeScene({
     return () => {
       window.cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', resize);
-      labelsRef.current.forEach((label) => label.element.remove());
-      labelsRef.current = [];
+      markerVisualsRef.current.forEach((visual) => visual.element?.remove());
+      markerVisualsRef.current = [];
       renderer.dispose();
       disposeGroup(fillGroup);
       disposeGroup(borderGroup);
@@ -760,7 +828,7 @@ export function GlobeScene({
       activeCountryBorderGroupRef.current = null;
       sceneContainer.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [cameraDistance, showDebugInfo]);
 
   useEffect(() => {
     const fillGroup = fillGroupRef.current;
@@ -795,7 +863,12 @@ export function GlobeScene({
     const globeGroup = globeGroupRef.current;
     const camera = cameraRef.current;
 
-    if (!focusCheckIn || !globeGroup || !camera) {
+    if (!focusCheckIn) {
+      focusAnimationRef.current = null;
+      return;
+    }
+
+    if (!globeGroup || !camera) {
       return;
     }
 
@@ -835,8 +908,8 @@ export function GlobeScene({
     }
 
     markerGroup.clear();
-    labelsRef.current.forEach((label) => label.element.remove());
-    labelsRef.current = [];
+    markerVisualsRef.current.forEach((visual) => visual.element?.remove());
+    markerVisualsRef.current = [];
 
     const markerMaterial = new THREE.MeshStandardMaterial({
       color: 0xffffff,
@@ -849,10 +922,17 @@ export function GlobeScene({
 
     for (const lightSpot of buildLightSpots(checkIns)) {
       const spotLight = createSpotLightSprite(lightSpot.count);
-      spotLight.position.copy(
-        latLonToVector(lightSpot.latitude, lightSpot.longitude, GLOBE_RADIUS * 1.02),
+      const surfacePosition = latLonToVector(
+        lightSpot.latitude,
+        lightSpot.longitude,
+        GLOBE_RADIUS * 1.02,
       );
+      spotLight.position.copy(surfacePosition);
       markerGroup.add(spotLight);
+      markerVisualsRef.current.push({
+        objects: [spotLight],
+        surfacePosition,
+      });
     }
 
     for (const checkIn of checkIns) {
@@ -875,9 +955,11 @@ export function GlobeScene({
       label.className = 'globe-marker-label';
       label.textContent = checkIn.viewerName;
       container.appendChild(label);
-      labelsRef.current.push({
+      markerVisualsRef.current.push({
         element: label,
-        position: labelPosition,
+        labelPosition,
+        objects: [marker, stem],
+        surfacePosition,
       });
     }
 
@@ -893,7 +975,13 @@ export function GlobeScene({
     };
   }, [checkIns]);
 
-  return <div ref={containerRef} className={`globe-canvas ${className}`.trim()} />;
+  return (
+    <div ref={containerRef} className={`globe-canvas ${className}`.trim()}>
+      {showDebugInfo ? (
+        <pre ref={debugInfoRef} className="globe-debug-info" aria-live="off" />
+      ) : null}
+    </div>
+  );
 }
 
 function upsertCheckIn(checkIns: GlobeCheckIn[], nextCheckIn: GlobeCheckIn): GlobeCheckIn[] {
@@ -921,12 +1009,23 @@ export function GlobeOverlayPage() {
   }, [checkIns]);
 
   function focusExistingCheckIn(checkIn: GlobeCheckIn) {
+    if (!config.animateCheckIns) {
+      setCheckIns((current) => upsertCheckIn(current, checkIn));
+      return;
+    }
+
     focusRequestIdRef.current += 1;
     setFocusCheckIn({
       checkIn,
       requestId: focusRequestIdRef.current,
     });
   }
+
+  useEffect(() => {
+    if (!config.animateCheckIns) {
+      setFocusCheckIn(null);
+    }
+  }, [config.animateCheckIns]);
 
   function resetGlobeSession() {
     setFocusCheckIn(null);
@@ -1005,13 +1104,14 @@ export function GlobeOverlayPage() {
           });
       },
     });
-  }, [config.channel, config.sessionId]);
+  }, [config.animateCheckIns, config.channel, config.sessionId]);
 
   return (
     <main className={config.transparent ? 'globe-overlay is-transparent' : 'globe-overlay'}>
       <GlobeScene
         checkIns={checkIns}
         config={config}
+        cameraDistance={OVERLAY_CAMERA_Z}
         focusCheckIn={focusCheckIn}
         onFocusMarkerPlace={(checkIn) => {
           setCheckIns((current) => upsertCheckIn(current, checkIn));

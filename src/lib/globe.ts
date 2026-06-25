@@ -1,6 +1,7 @@
 import { getApiBaseUrl } from './config';
 
 export interface GlobeConfig {
+  animateCheckIns: boolean;
   channel: string;
   sessionId: string;
   rotationSpeed: number;
@@ -23,9 +24,10 @@ export interface GlobeCheckIn {
 }
 
 export const DEFAULT_GLOBE_CONFIG: GlobeConfig = {
+  animateCheckIns: false,
   channel: '',
   sessionId: '',
-  rotationSpeed: 0.1,
+  rotationSpeed: 0.14,
   showLabels: true,
   transparent: true,
 };
@@ -70,6 +72,10 @@ export function parseGlobeConfig(search: string): GlobeConfig {
   );
 
   return {
+    animateCheckIns: parseBoolean(
+      params.get('animations'),
+      DEFAULT_GLOBE_CONFIG.animateCheckIns,
+    ),
     channel: normalizeTwitchChannel(params.get('channel') ?? ''),
     sessionId: params.get('session')?.trim() || createGlobeSessionId(),
     rotationSpeed,
@@ -85,6 +91,7 @@ export function buildGlobeOverlayUrl(config: GlobeConfig): string {
   const overlayUrl = new URL('./overlay.html', window.location.href);
 
   overlayUrl.searchParams.set('session', config.sessionId);
+  overlayUrl.searchParams.set('animations', config.animateCheckIns ? '1' : '0');
   overlayUrl.searchParams.set('speed', config.rotationSpeed.toFixed(2));
   overlayUrl.searchParams.set('labels', config.showLabels ? '1' : '0');
   overlayUrl.searchParams.set('transparent', config.transparent ? '1' : '0');
@@ -143,6 +150,26 @@ export async function submitGlobeCheckIn(
 
   const payload = (await response.json()) as { checkIn?: GlobeCheckIn };
   return payload.checkIn ?? null;
+}
+
+export async function removeGlobeCheckIn(
+  sessionId: string,
+  viewerName: string,
+): Promise<void> {
+  const response = await fetch(`${getApiBaseUrl()}/globe/checkins`, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      sessionId,
+      viewerName,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Unable to remove globe check-in (${response.status}).`);
+  }
 }
 
 export async function clearGlobeSession(sessionId: string): Promise<void> {
