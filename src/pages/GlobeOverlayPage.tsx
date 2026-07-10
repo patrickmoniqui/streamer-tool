@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { feature } from 'topojson-client';
 import countriesTopology from 'world-atlas/countries-110m.json';
+import landTopology from 'world-atlas/land-110m.json';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import {
   clearGlobeSession,
@@ -15,6 +16,10 @@ import {
 import { connectTwitchCheckInChat } from '../lib/twitchChat';
 
 const GLOBE_RADIUS = 1;
+const GLOBE_FILL_RADIUS = GLOBE_RADIUS * 0.999;
+const GLOBE_OCCLUSION_RADIUS = GLOBE_FILL_RADIUS * 0.9995;
+const MAX_FILL_TRIANGLE_EDGE_DEGREES = 3;
+const MAX_FILL_SUBDIVISION_DEPTH = 6;
 const BASE_CAMERA_Z = 3.25;
 const MARKER_LABEL_RADIUS = 1.145;
 const MARKER_ENVELOPE_VIEWPORT_HEIGHT = 0.8;
@@ -83,6 +88,13 @@ interface CountryBorderCollection {
 const COUNTRY_BORDERS = feature(
   countriesTopology as unknown as Topology<{ countries: GeometryCollection }>,
   countriesTopology.objects.countries as GeometryCollection,
+) as CountryBorderCollection;
+
+// This topology has national boundaries dissolved, leaving coastlines and the
+// general outline of continents and islands for the base globe map.
+const LANDMASSES = feature(
+  landTopology as unknown as Topology<{ land: GeometryCollection }>,
+  landTopology.objects.land as GeometryCollection,
 ) as CountryBorderCollection;
 
 function getFeatureKey(feature: CountryBorderFeature): string {
@@ -340,7 +352,7 @@ function createActiveCountryBorderMaterial(
   });
 }
 
-function createCountryFillMaterial(
+function createLandmassFillMaterial(
   fillColor: THREE.ColorRepresentation,
 ): THREE.ShaderMaterial {
   const color = new THREE.Color(fillColor);
@@ -350,7 +362,7 @@ function createCountryFillMaterial(
       fillColor: { value: color },
     },
     transparent: true,
-    depthTest: false,
+    depthTest: true,
     depthWrite: false,
     vertexShader: `
       varying float vFacing;
@@ -373,8 +385,10 @@ function createCountryFillMaterial(
           discard;
         }
 
-        float alpha = smoothstep(0.02, 0.18, vFacing) * 0.10;
-        gl_FragColor = vec4(fillColor, alpha);
+        float visibility = smoothstep(0.06, 0.34, vFacing);
+        float alpha = visibility * 0.16;
+        vec3 shadedColor = mix(fillColor * 0.34, fillColor * 0.78, visibility);
+        gl_FragColor = vec4(shadedColor, alpha);
       }
     `,
   });
@@ -449,7 +463,85 @@ function disposeSprite(sprite: THREE.Sprite): void {
   material.dispose();
 }
 
-function createCountryFillMeshFromPolygon(
+function getTriangleMaxEdgeDegrees(
+  first: THREE.Vector2,
+  second: THREE.Vector2,
+  third: THREE.Vector2,
+): number {
+  return Math.max(
+    first.distanceTo(second),
+    second.distanceTo(third),
+    third.distanceTo(first),
+  );
+}
+
+function appendProjectedFillVertex(
+  point: THREE.Vector2,
+  vertices: number[],
+): number {
+  const vertex = latLonToVector(point.y, point.x, GLOBE_FILL_RADIUS);
+  vertices.push(vertex.x, vertex.y, vertex.z);
+  return vertices.length / 3 - 1;
+}
+
+function appendSubdividedFillTriangle(
+  first: THREE.Vector2,
+  second: THREE.Vector2,
+  third: THREE.Vector2,
+  vertices: number[],
+  indices: number[],
+  depth = 0,
+): void {
+  if (
+    depth < MAX_FILL_SUBDIVISION_DEPTH &&
+    getTriangleMaxEdgeDegrees(first, second, third) > MAX_FILL_TRIANGLE_EDGE_DEGREES
+  ) {
+    const firstSecondMidpoint = first.clone().add(second).multiplyScalar(0.5);
+    const secondThirdMidpoint = second.clone().add(third).multiplyScalar(0.5);
+    const thirdFirstMidpoint = third.clone().add(first).multiplyScalar(0.5);
+
+    appendSubdividedFillTriangle(
+      first,
+      firstSecondMidpoint,
+      thirdFirstMidpoint,
+      vertices,
+      indices,
+      depth + 1,
+    );
+    appendSubdividedFillTriangle(
+      firstSecondMidpoint,
+      second,
+      secondThirdMidpoint,
+      vertices,
+      indices,
+      depth + 1,
+    );
+    appendSubdividedFillTriangle(
+      thirdFirstMidpoint,
+      secondThirdMidpoint,
+      third,
+      vertices,
+      indices,
+      depth + 1,
+    );
+    appendSubdividedFillTriangle(
+      firstSecondMidpoint,
+      secondThirdMidpoint,
+      thirdFirstMidpoint,
+      vertices,
+      indices,
+      depth + 1,
+    );
+    return;
+  }
+
+  const firstIndex = appendProjectedFillVertex(first, vertices);
+  const secondIndex = appendProjectedFillVertex(second, vertices);
+  const thirdIndex = appendProjectedFillVertex(third, vertices);
+  indices.push(firstIndex, secondIndex, thirdIndex);
+}
+
+function createLandmassFillMeshFromPolygon(
   polygon: GeoJsonPolygon,
   material: THREE.ShaderMaterial,
 ): THREE.Mesh | null {
@@ -477,47 +569,44 @@ function createCountryFillMeshFromPolygon(
     )
     .filter((ring) => ring.length >= 3);
   const triangles = THREE.ShapeUtils.triangulateShape(contour, holes);
-  const allRings = [outerRing, ...polygon.slice(1).map((ring) => ring.slice(0, -1))];
-  const positions = allRings.flat();
+  const flatPoints = [contour, ...holes].flat();
 
-  if (!triangles.length || positions.length < 3) {
+  if (!triangles.length || flatPoints.length < 3) {
     return null;
   }
 
-  const vertices = new Float32Array(positions.length * 3);
+  const vertices: number[] = [];
+  const indices: number[] = [];
 
-  positions.forEach(([longitude, latitude], index) => {
-    const vertex = latLonToVector(latitude, longitude, GLOBE_RADIUS * 0.9985);
-    vertices[index * 3] = vertex.x;
-    vertices[index * 3 + 1] = vertex.y;
-    vertices[index * 3 + 2] = vertex.z;
-  });
+  for (const [firstIndex, secondIndex, thirdIndex] of triangles) {
+    appendSubdividedFillTriangle(
+      flatPoints[firstIndex],
+      flatPoints[secondIndex],
+      flatPoints[thirdIndex],
+      vertices,
+      indices,
+    );
+  }
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-  geometry.setIndex(triangles.flat());
+  geometry.setAttribute(
+    'position',
+    new THREE.BufferAttribute(new Float32Array(vertices), 3),
+  );
+  geometry.setIndex(indices);
 
   const mesh = new THREE.Mesh(geometry, material);
   mesh.renderOrder = 0;
   return mesh;
 }
 
-function addCountryFills(
+function addLandmassFills(
   fillGroup: THREE.Group,
-  highlightedCountryKeys: Set<string>,
   themeColors: GlobeThemeColors,
 ): void {
-  if (!highlightedCountryKeys.size) {
-    return;
-  }
+  const material = createLandmassFillMaterial(themeColors.fill);
 
-  const material = createCountryFillMaterial(themeColors.fill);
-
-  for (const feature of COUNTRY_BORDERS.features ?? []) {
-    if (!highlightedCountryKeys.has(getFeatureKey(feature))) {
-      continue;
-    }
-
+  for (const feature of LANDMASSES.features ?? []) {
     const geometry = feature.geometry;
 
     if (!geometry?.coordinates) {
@@ -532,7 +621,7 @@ function addCountryFills(
           : [];
 
     for (const polygon of polygons) {
-      const fillMesh = createCountryFillMeshFromPolygon(polygon, material);
+      const fillMesh = createLandmassFillMeshFromPolygon(polygon, material);
 
       if (fillMesh) {
         fillGroup.add(fillMesh);
@@ -541,14 +630,13 @@ function addCountryFills(
   }
 }
 
-function addCountryBorders(
+function addLandmassBorders(
   borderGroup: THREE.Group,
-  borderData: CountryBorderCollection,
   themeColors: GlobeThemeColors,
 ): void {
   const material = createCountryBorderMaterial(themeColors.border);
 
-  for (const feature of borderData.features ?? []) {
+  for (const feature of LANDMASSES.features ?? []) {
     const geometry = feature.geometry;
 
     if (!geometry?.coordinates) {
@@ -755,6 +843,13 @@ export function GlobeScene({
     scene.add(globeGroup);
     globeGroupRef.current = globeGroup;
 
+    const globeDepthGeometry = new THREE.SphereGeometry(GLOBE_OCCLUSION_RADIUS, 64, 64);
+    const globeDepthMaterial = new THREE.MeshBasicMaterial();
+    globeDepthMaterial.colorWrite = false;
+    const globeDepthMesh = new THREE.Mesh(globeDepthGeometry, globeDepthMaterial);
+    globeDepthMesh.renderOrder = -1;
+    globeGroup.add(globeDepthMesh);
+
     const fillGroup = new THREE.Group();
     globeGroup.add(fillGroup);
     fillGroupRef.current = fillGroup;
@@ -771,11 +866,8 @@ export function GlobeScene({
     globeGroup.add(markerGroup);
     markerGroupRef.current = markerGroup;
 
-    addCountryBorders(
-      borderGroup,
-      COUNTRY_BORDERS,
-      getGlobeThemeColors(config.globeColor),
-    );
+    addLandmassBorders(borderGroup, getGlobeThemeColors(config.globeColor));
+
 
     function resize() {
       const width = sceneContainer.clientWidth || window.innerWidth;
@@ -959,6 +1051,8 @@ export function GlobeScene({
       disposeGroup(fillGroup);
       disposeGroup(borderGroup);
       disposeGroup(activeCountryBorderGroup);
+      globeDepthGeometry.dispose();
+      globeDepthMaterial.dispose();
       fillGroupRef.current = null;
       borderGroupRef.current = null;
       activeCountryBorderGroupRef.current = null;
@@ -976,28 +1070,15 @@ export function GlobeScene({
     }
 
     const themeColors = getGlobeThemeColors(config.globeColor);
-    const highlightedCountryKeys = new Set<string>();
-
-    for (const checkIn of checkIns) {
-      const countryKey = findCountryKeyForLocation(
-        checkIn.latitude,
-        checkIn.longitude,
-      );
-
-      if (countryKey) {
-        highlightedCountryKeys.add(countryKey);
-      }
-    }
 
     disposeGroup(borderGroup);
     borderGroup.clear();
-    addCountryBorders(borderGroup, COUNTRY_BORDERS, themeColors);
+    addLandmassBorders(borderGroup, themeColors);
     disposeGroup(fillGroup);
     fillGroup.clear();
-    addCountryFills(fillGroup, highlightedCountryKeys, themeColors);
+    addLandmassFills(fillGroup, themeColors);
     disposeGroup(activeCountryBorderGroup);
     activeCountryBorderGroup.clear();
-    addActiveCountryBorders(activeCountryBorderGroup, highlightedCountryKeys, themeColors);
   }, [checkIns, config.globeColor]);
 
   useEffect(() => {

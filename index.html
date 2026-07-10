@@ -62,6 +62,57 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
+      .credits-card {
+        margin-top: 24px;
+        border: 1px solid rgba(196, 219, 245, 0.16);
+        border-radius: 8px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 38%),
+          rgba(10, 25, 41, 0.82);
+        padding: 24px;
+      }
+
+      .credits-label {
+        margin: 0 0 8px;
+        color: #f5b63e;
+        font-size: 0.8rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+
+      .credits-copy {
+        margin: 0;
+        max-width: 620px;
+        color: #aac0d8;
+        line-height: 1.6;
+      }
+
+      .credits-links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .credits-link {
+        display: inline-flex;
+        align-items: center;
+        min-height: 42px;
+        padding: 0 14px;
+        border: 1px solid rgba(245, 182, 62, 0.26);
+        border-radius: 999px;
+        background: rgba(245, 182, 62, 0.08);
+        color: #f5f9ff;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .credits-link:hover {
+        border-color: rgba(245, 182, 62, 0.46);
+        background: rgba(245, 182, 62, 0.14);
+      }
+
       .tool-card {
         min-height: 220px;
         display: flex;
@@ -130,6 +181,40 @@
           </div>
           <span class="tool-action">Open settings</span>
         </a>
+      </section>
+
+      <section class="credits-card" aria-label="Creator credits">
+        <p class="credits-label">Creator</p>
+        <p class="credits-copy">
+          Built by DJMoneyKey. If you landed here through stream or social, these
+          are the official places to find me.
+        </p>
+        <div class="credits-links">
+          <a
+            class="credits-link"
+            href="https://www.twitch.tv/djmoneykey"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Twitch
+          </a>
+          <a
+            class="credits-link"
+            href="https://instagram.com/dj_moneykey"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Instagram
+          </a>
+          <a
+            class="credits-link"
+            href="https://github.com/patrickmoniqui"
+            target="_blank"
+            rel="noreferrer"
+          >
+            GitHub
+          </a>
+        </div>
       </section>
     </main>
   </body>
