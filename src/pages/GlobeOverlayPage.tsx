@@ -1076,7 +1076,6 @@ export function GlobeScene({
     addLandmassBorders(borderGroup, themeColors);
     disposeGroup(fillGroup);
     fillGroup.clear();
-    addLandmassFills(fillGroup, themeColors);
     disposeGroup(activeCountryBorderGroup);
     activeCountryBorderGroup.clear();
   }, [checkIns, config.globeColor]);
