@@ -395,6 +395,14 @@ export function SettingsPage() {
 
       <section className="settings-layout">
         <div className="settings-panel">
+          <div className="panel-heading">
+            <span className="panel-step" aria-hidden="true">01</span>
+            <div>
+              <p className="panel-kicker">Configure</p>
+              <h2>Build your scorebug</h2>
+              <p>Choose the game feed, visual treatment, and update behavior.</p>
+            </div>
+          </div>
           <label className="field">
             <span>Sport</span>
             <select
@@ -575,8 +583,8 @@ export function SettingsPage() {
             </details>
             <small className="field-hint">
               {config.teams.length
-                ? `Following ${config.teams.length} team${config.teams.length === 1 ? '' : 's'}. The overlay stays in auto mode and switches to multi-game when more than one matching live game is active.`
-                : 'Leave every box unchecked to follow the best live or upcoming game automatically, with a multi-game view when more than one live matchup is active.'}
+                ? `Following ${config.teams.length} team${config.teams.length === 1 ? '' : 's'}. The overlay stays in auto mode: stacked layout shows multiple live games, while compact rotates through them every minute.`
+                : 'Leave every box unchecked to follow the best live or upcoming game automatically. Stacked layout shows multiple live matchups; compact rotates through them every minute.'}
             </small>
           </div>
 
@@ -623,12 +631,13 @@ export function SettingsPage() {
             <span>Goal animation</span>
             <select
               value={config.goalAnimation}
-              onChange={(event) =>
+              onChange={(event) => {
+                triggerPreviewGoal('home');
                 setConfig((current) => ({
                   ...current,
                   goalAnimation: event.target.value as OverlayConfig['goalAnimation'],
-                }))
-              }
+                }));
+              }}
             >
               {GOAL_ANIMATION_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -636,7 +645,10 @@ export function SettingsPage() {
                 </option>
               ))}
             </select>
-            <small className="field-hint">{selectedGoalAnimation.description}</small>
+            <small className="field-hint">
+              {selectedGoalAnimation.description} Selecting a style plays it in the
+              preview.
+            </small>
           </label>
 
           <div className="field">
@@ -788,6 +800,14 @@ export function SettingsPage() {
         </div>
 
         <div className="preview-panel">
+          <div className="panel-heading panel-heading-preview">
+            <span className="panel-step" aria-hidden="true">02</span>
+            <div>
+              <p className="panel-kicker">Go live</p>
+              <h2>Preview &amp; publish</h2>
+              <p>Your overlay URL updates as you configure it.</p>
+            </div>
+          </div>
           <div className="preview-frame">
             <SelectedScoreboardCard
               displayMode={data.displayMode}
@@ -800,11 +820,7 @@ export function SettingsPage() {
               layout={config.layout}
               goalAnimation={config.goalAnimation}
               showCredit
-              debugGoalFlash={
-                canUseTestingTools && data.displayMode === 'single'
-                  ? previewGoalFlash
-                  : null
-              }
+              debugGoalFlash={previewGoalFlash}
               emptyLabel="No game found for this setup"
             />
           </div>
@@ -866,8 +882,8 @@ export function SettingsPage() {
           ) : null}
           <p className="helper-text">
             Leave every team unchecked to follow the best live or upcoming game
-            automatically. If more than one live game matches, the overlay
-            switches to a multi-game view.
+            automatically. When several live games match, stacked layout shows a
+            multi-game view while compact rotates through them every minute.
           </p>
         </div>
       </section>

@@ -386,7 +386,7 @@ function createLandmassFillMaterial(
         }
 
         float visibility = smoothstep(0.06, 0.34, vFacing);
-        float alpha = visibility * 0.16;
+        float alpha = visibility * 0.20;
         vec3 shadedColor = mix(fillColor * 0.34, fillColor * 0.78, visibility);
         gl_FragColor = vec4(shadedColor, alpha);
       }

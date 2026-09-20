@@ -1,6 +1,6 @@
-# Sport Live Feed
+# Streamer Tool
 
-Static React app for OBS/Twitch-friendly live sports score overlays, with a settings page that generates a shareable browser-source URL.
+Multi-tool React app for streamers, with OBS/Twitch-friendly browser sources and configurable overlays.
 
 ## Scope
 

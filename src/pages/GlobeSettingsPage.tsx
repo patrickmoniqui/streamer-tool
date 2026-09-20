@@ -288,6 +288,14 @@ export function GlobeSettingsPage() {
 
       <div className="settings-layout">
         <section className="settings-panel">
+          <div className="panel-heading">
+            <span className="panel-step" aria-hidden="true">01</span>
+            <div>
+              <p className="panel-kicker">Configure</p>
+              <h2>Set up the globe</h2>
+              <p>Connect a channel, then choose how its check-ins appear.</p>
+            </div>
+          </div>
           <label className="field">
             <span>Twitch channel</span>
             <input
@@ -488,9 +496,17 @@ export function GlobeSettingsPage() {
         </section>
 
         <section className="preview-panel globe-link-panel">
+          <div className="panel-heading panel-heading-preview">
+            <span className="panel-step" aria-hidden="true">02</span>
+            <div>
+              <p className="panel-kicker">Go live</p>
+              <h2>Preview &amp; publish</h2>
+              <p>Copy the browser-source URL when the globe looks right.</p>
+            </div>
+          </div>
           <div>
             <p className="eyebrow">OBS Browser Source</p>
-            <h2>Overlay URL</h2>
+            <h3>Overlay URL</h3>
             <p className="header-copy">
               Add this URL as a browser source. Every overlay using the same Twitch
               channel shares one globe and marker list.

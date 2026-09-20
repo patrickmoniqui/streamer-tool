@@ -1,6 +1,9 @@
+import { useEffect, useState } from 'react';
 import { MultiScoreboardCard } from './MultiScoreboardCard';
 import { ScoreboardCard } from './ScoreboardCard';
 import type { DataSnapshot, OverlayConfig, NhlGame } from '../lib/types';
+
+const COMPACT_GAME_ROTATION_MS = 60_000;
 
 interface SelectedScoreboardCardProps {
   displayMode: DataSnapshot['displayMode'];
@@ -36,7 +39,31 @@ export function SelectedScoreboardCard({
   className,
   emptyLabel,
 }: SelectedScoreboardCardProps) {
-  if (displayMode === 'multi' && selectedGames.length > 1) {
+  const [compactGameIndex, setCompactGameIndex] = useState(0);
+  const selectedGameIds = selectedGames.map((game) => game.id).join(',');
+  const shouldRotateCompactGames =
+    layout === 'compact' && displayMode === 'multi' && selectedGames.length > 1;
+
+  useEffect(() => {
+    if (!shouldRotateCompactGames) {
+      setCompactGameIndex(0);
+      return;
+    }
+
+    setCompactGameIndex((currentIndex) => currentIndex % selectedGames.length);
+
+    const intervalId = window.setInterval(() => {
+      setCompactGameIndex((currentIndex) => (currentIndex + 1) % selectedGames.length);
+    }, COMPACT_GAME_ROTATION_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [selectedGameIds, selectedGames.length, shouldRotateCompactGames]);
+
+  const compactGame = shouldRotateCompactGames
+    ? selectedGames[compactGameIndex % selectedGames.length] ?? selectedGame
+    : selectedGame;
+
+  if (displayMode === 'multi' && selectedGames.length > 1 && !shouldRotateCompactGames) {
     return (
       <MultiScoreboardCard
         primaryGame={selectedGame}
@@ -46,6 +73,7 @@ export function SelectedScoreboardCard({
         style={style}
         goalAnimation={goalAnimation}
         showCredit={showCredit}
+        debugGoalFlash={debugGoalFlash}
         className={className}
         emptyLabel={emptyLabel}
       />
@@ -54,7 +82,7 @@ export function SelectedScoreboardCard({
 
   return (
     <ScoreboardCard
-      game={selectedGame}
+      game={compactGame}
       previousGame={previousGame}
       showClock={showClock}
       muted={muted}

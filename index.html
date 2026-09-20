@@ -6,9 +6,11 @@
     <title>Keylight Stream Tools</title>
     <meta name="description" content="Keylight stream tools for OBS and browser sources." />
     <style>
+      @import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+
       :root {
         color-scheme: dark;
-        font-family: "Segoe UI", system-ui, sans-serif;
+        font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
         background: #08131f;
         color: #f5f9ff;
       }
@@ -21,15 +23,34 @@
         margin: 0;
         min-height: 100vh;
         background:
-          radial-gradient(circle at 15% 15%, rgba(245, 182, 62, 0.16), transparent 28%),
-          radial-gradient(circle at 85% 10%, rgba(76, 201, 240, 0.18), transparent 30%),
-          linear-gradient(145deg, #07121d 0%, #12253a 52%, #071623 100%);
+          linear-gradient(rgba(7, 18, 29, 0.86), rgba(7, 18, 29, 0.96)),
+          repeating-linear-gradient(
+            90deg,
+            transparent 0 79px,
+            rgba(255, 255, 255, 0.025) 80px
+          ),
+          repeating-linear-gradient(
+            0deg,
+            transparent 0 79px,
+            rgba(255, 255, 255, 0.025) 80px
+          ),
+          #07121d;
       }
 
       main {
-        width: min(1040px, calc(100% - 32px));
+        width: min(1180px, calc(100% - 32px));
         margin: 0 auto;
-        padding: 56px 0;
+        padding: 72px 0;
+      }
+
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 32px;
+        align-items: end;
+        margin-bottom: 46px;
+        padding-bottom: 30px;
+        border-bottom: 1px solid rgba(196, 219, 245, 0.14);
       }
 
       .eyebrow {
@@ -44,22 +65,40 @@
       h1 {
         margin: 0;
         max-width: 760px;
-        font-size: clamp(2.4rem, 6vw, 4.8rem);
-        line-height: 0.95;
+        font-size: clamp(2.8rem, 6vw, 5.4rem);
+        line-height: 0.9;
+        letter-spacing: -0.045em;
       }
 
       .intro {
         max-width: 620px;
-        margin: 18px 0 34px;
+        margin: 18px 0 0;
         color: #aac0d8;
         font-size: 1.02rem;
         line-height: 1.65;
       }
 
+      .hero-mark {
+        width: clamp(100px, 12vw, 150px);
+        aspect-ratio: 1;
+        display: grid;
+        place-items: center;
+        border: 1px solid rgba(245, 182, 62, 0.32);
+        border-radius: 24px;
+        background:
+          linear-gradient(135deg, rgba(245, 182, 62, 0.16), transparent 58%),
+          #0a1929;
+        color: #f5b63e;
+      }
+
+      .hero-mark svg {
+        width: 62%;
+      }
+
       .tool-grid {
         display: grid;
-        gap: 18px;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 22px;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
       }
 
       .credits-card {
@@ -114,69 +153,229 @@
       }
 
       .tool-card {
-        min-height: 220px;
+        position: relative;
+        min-height: 390px;
+        min-width: 0;
+        overflow: hidden;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        border: 1px solid rgba(196, 219, 245, 0.16);
-        border-radius: 8px;
+        border: 1px solid rgba(196, 219, 245, 0.18);
+        border-radius: 24px;
         background:
-          linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 38%),
-          rgba(10, 25, 41, 0.82);
+          linear-gradient(145deg, rgba(255, 255, 255, 0.045), transparent 36%),
+          #0a1929;
         color: inherit;
         padding: 24px;
         text-decoration: none;
+        transition:
+          border-color 180ms ease,
+          transform 180ms ease,
+          box-shadow 180ms ease;
       }
 
       .tool-card:hover {
-        border-color: rgba(245, 182, 62, 0.46);
-        transform: translateY(-2px);
+        border-color: var(--tool-color);
+        transform: translateY(-5px);
+        box-shadow: 0 26px 58px rgba(0, 0, 0, 0.3);
+      }
+
+      .tool-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 78% 18%, var(--tool-glow), transparent 36%),
+          linear-gradient(145deg, rgba(255, 255, 255, 0.035), transparent 45%);
+        pointer-events: none;
+      }
+
+      .tool-card.score {
+        --tool-color: #f5b63e;
+        --tool-glow: rgba(245, 182, 62, 0.18);
+      }
+
+      .tool-card.globe {
+        --tool-color: #59c9ff;
+        --tool-glow: rgba(89, 201, 255, 0.2);
       }
 
       .tool-card h2 {
-        margin: 0 0 10px;
-        font-size: 1.7rem;
+        margin: 0;
+        font-size: clamp(1.5rem, 2.4vw, 2rem);
+        letter-spacing: -0.025em;
+      }
+
+      .tool-logo {
+        position: relative;
+        z-index: 1;
+        width: 42%;
+        min-width: 96px;
+        max-width: 142px;
+        aspect-ratio: 1;
+        display: grid;
+        place-items: center;
+        border: 1px solid color-mix(in srgb, var(--tool-color) 42%, transparent);
+        border-radius: 18px;
+        background: color-mix(in srgb, var(--tool-color) 10%, #08131f);
+        color: var(--tool-color);
+      }
+
+      .tool-logo svg {
+        width: 72%;
+        height: 72%;
+        overflow: visible;
+      }
+
+      .tool-title {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 9px;
+      }
+
+      .tool-title h2 {
+        margin: 0;
+      }
+
+      .experimental-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        border: 1px solid color-mix(in srgb, var(--tool-color) 46%, transparent);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--tool-color) 10%, transparent);
+        color: var(--tool-color);
+        padding: 3px 8px;
+        font-size: 0.66rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
       }
 
       .tool-card p {
+        position: relative;
+        z-index: 1;
         margin: 0;
         color: #aac0d8;
         line-height: 1.55;
       }
 
+      .tool-copy {
+        position: relative;
+        z-index: 1;
+      }
+
       .tool-action {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
         margin-top: 22px;
-        color: #ffcb67;
+        color: var(--tool-color);
         font-weight: 800;
       }
 
+      .tool-action::after {
+        content: "→";
+        font-size: 1.35rem;
+        transition: transform 180ms ease;
+      }
+
+      .tool-card:hover .tool-action::after {
+        transform: translateX(4px);
+      }
+
+      @media (max-width: 900px) {
+        .tool-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
       @media (max-width: 760px) {
+        main {
+          padding-top: 42px;
+        }
+
+        .hero {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-mark {
+          display: none;
+        }
+
         .tool-grid {
           grid-template-columns: 1fr;
+        }
+
+        .tool-card {
+          width: min(100%, 440px);
         }
       }
     </style>
   </head>
   <body>
     <main>
-      <p class="eyebrow">Keylight Stream Tools</p>
-      <h1>OBS-ready overlays for live streams</h1>
-      <p class="intro">
-        Configure browser-source tools for scoreboards, live reactions, and viewer
-        interaction.
-      </p>
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Keylight Stream Tools</p>
+          <h1>Put the stream on screen.</h1>
+          <p class="intro">
+            Interactive overlays built for OBS. Configure a tool, copy its browser
+            source URL, and go live.
+          </p>
+        </div>
+        <div class="hero-mark" aria-hidden="true">
+          <svg viewBox="0 0 100 100" fill="none">
+            <path d="M18 24h64v44H18z" stroke="currentColor" stroke-width="6" />
+            <path d="M36 84h28M50 68v16" stroke="currentColor" stroke-width="6" />
+            <path d="m42 36 22 10-22 10z" fill="currentColor" />
+          </svg>
+        </div>
+      </header>
 
       <section class="tool-grid" aria-label="Stream tools">
-        <a class="tool-card" href="./game-score/">
-          <div>
-            <h2>Game Score</h2>
+        <a class="tool-card score" href="./game-score/">
+          <div class="tool-logo" aria-hidden="true">
+            <svg viewBox="0 0 120 120" fill="none">
+              <path d="M17 31h86v58H17z" stroke="currentColor" stroke-width="7" />
+              <path d="M60 31v58" stroke="currentColor" stroke-width="5" opacity=".45" />
+              <path d="M29 47h18v26H29zM73 47h18v26H73z" fill="currentColor" />
+              <circle cx="60" cy="60" r="7" stroke="currentColor" stroke-width="4" />
+            </svg>
+          </div>
+          <div class="tool-copy">
+            <div class="tool-title">
+              <h2>Game Score</h2>
+              <span class="experimental-badge">Experimental</span>
+            </div>
             <p>Live sports score overlays for NHL and soccer streams.</p>
           </div>
           <span class="tool-action">Open settings</span>
         </a>
-        <a class="tool-card" href="./globe/">
-          <div>
-            <h2>Globe Check-In</h2>
+        <a class="tool-card globe" href="./globe/">
+          <div class="tool-logo" aria-hidden="true">
+            <svg viewBox="0 0 120 120" fill="none">
+              <circle cx="60" cy="60" r="43" stroke="currentColor" stroke-width="7" />
+              <path
+                d="M18 60h84M60 17c15 12 23 26 23 43S75 91 60 103M60 17C45 29 37 43 37 60s8 31 23 43"
+                stroke="currentColor"
+                stroke-width="5"
+              />
+              <path d="M31 34c17 9 41 9 58 0M31 86c17-9 41-9 58 0" stroke="currentColor" stroke-width="4" opacity=".55" />
+              <circle cx="82" cy="39" r="8" fill="currentColor" />
+            </svg>
+          </div>
+          <div class="tool-copy">
+            <div class="tool-title">
+              <h2>Globe Check-In</h2>
+              <span class="experimental-badge">Experimental</span>
+            </div>
             <p>Rotating Twitch viewer map powered by chat check-in commands.</p>
           </div>
           <span class="tool-action">Open settings</span>

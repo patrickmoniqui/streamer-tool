@@ -1,9 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  CREDIT_LABEL,
-  CREDIT_NAME,
-} from '../lib/credit';
-import {
   getCompactSeriesState,
   getUpcomingCountdownDetail,
   getSeriesLine,
@@ -12,6 +8,7 @@ import {
 } from '../lib/format';
 import { isFinalGame, isLiveGame, isUpcomingGame } from '../lib/gameSelection';
 import { useCreditReveal } from '../lib/useCreditReveal';
+import { ScorebugCreditWatermark } from './ScorebugCreditWatermark';
 import { GoalFlash, type GoalFlashState } from './GoalFlash';
 import { GOAL_FLASH_DURATION_MS, useGoalFlash, useGoalHorn } from '../lib/useGoalEffects';
 import type {
@@ -151,22 +148,6 @@ function CompactTeam({
         </>
       )}
     </div>
-  );
-}
-
-function TwitchIcon() {
-  return (
-    <svg
-      className="twitch-icon"
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        fill="currentColor"
-        d="M4 3h16v11l-4 4h-4l-2 3H7v-3H4V3zm2 2v11h3v2l2-2h4l3-3V5H6zm4 3h2v4h-2V8zm5 0h2v4h-2V8z"
-      />
-    </svg>
   );
 }
 
@@ -353,9 +334,6 @@ export function ScoreboardCard({
         data-layout={layout}
       >
         <div className="scoreboard-empty">{emptyLabel}</div>
-        {showCreditReveal ? (
-          <div className="scoreboard-empty-credit">{CREDIT_LABEL}</div>
-        ) : null}
         {activeGoalFlash ? (
           <GoalFlash
             key={activeGoalFlash.key}
@@ -363,13 +341,14 @@ export function ScoreboardCard({
             animationStyle={goalAnimation}
           />
         ) : null}
+        <ScorebugCreditWatermark visible={showCreditReveal} />
       </div>
     );
   }
 
   const statusTone = getStatusTone(game);
   const isCompact = layout === 'compact';
-  const footerText = showCreditReveal ? CREDIT_LABEL : getSeriesLine(game);
+  const footerText = getSeriesLine(game);
   const compactSeriesState = getCompactSeriesState(game);
 
   return (
@@ -403,15 +382,6 @@ export function ScoreboardCard({
               sport={game.sport}
             />
           </div>
-          {showCreditReveal ? (
-            <div className="scorebug-compact-credit-bar compact-credit">
-              <span className="compact-credit-by">by</span>
-              <span className="compact-credit-brand">
-                <TwitchIcon />
-                <span>{CREDIT_NAME}</span>
-              </span>
-            </div>
-          ) : null}
         </>
       ) : (
         <>
@@ -438,9 +408,7 @@ export function ScoreboardCard({
           </div>
           {footerText ? (
             <div className="scorebug-footer">
-              <div className={`series-line ${showCreditReveal ? 'credit-line' : ''}`}>
-                {footerText}
-              </div>
+              <div className="series-line">{footerText}</div>
             </div>
           ) : null}
         </>
@@ -452,6 +420,7 @@ export function ScoreboardCard({
           animationStyle={goalAnimation}
         />
       ) : null}
+      <ScorebugCreditWatermark visible={showCreditReveal} />
     </div>
   );
 }

@@ -12,7 +12,7 @@ export const DEFAULT_CONFIG: OverlayConfig = {
   goalAnimation: 'logo-storm',
   teams: [],
   refreshSeconds: MIN_REFRESH_SECONDS,
-  playoffsOnly: true,
+  playoffsOnly: false,
   showClock: true,
   muted: false,
   showCredit: true,

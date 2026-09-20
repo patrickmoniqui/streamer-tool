@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { CREDIT_LABEL } from '../lib/credit';
 import {
   getStatusBadge,
   getStatusDetail,
@@ -7,6 +6,9 @@ import {
 } from '../lib/format';
 import { isFinalGame, isLiveGame } from '../lib/gameSelection';
 import { useCreditReveal } from '../lib/useCreditReveal';
+import { ScorebugCreditWatermark } from './ScorebugCreditWatermark';
+import { GoalFlash, type GoalFlashState } from './GoalFlash';
+import { GOAL_FLASH_DURATION_MS } from '../lib/useGoalEffects';
 import type { GoalAnimationStyle, NhlGame, OverlayLayout, OverlayStyle } from '../lib/types';
 
 interface MultiScoreboardCardProps {
@@ -17,6 +19,10 @@ interface MultiScoreboardCardProps {
   style: OverlayStyle;
   goalAnimation?: GoalAnimationStyle;
   showCredit: boolean;
+  debugGoalFlash?: {
+    key: number;
+    alignment: 'away' | 'home';
+  } | null;
   className?: string;
   emptyLabel?: string;
 }
@@ -55,7 +61,9 @@ export function MultiScoreboardCard({
   showClock,
   layout,
   style,
+  goalAnimation,
   showCredit,
+  debugGoalFlash = null,
   className,
   emptyLabel = 'No live games available',
 }: MultiScoreboardCardProps) {
@@ -67,6 +75,7 @@ export function MultiScoreboardCard({
   const [goalReactions, setGoalReactions] = useState<
     Record<number, MultiGoalReaction>
   >({});
+  const [manualGoalFlash, setManualGoalFlash] = useState<GoalFlashState | null>(null);
   const previousScoresRef = useRef<Map<number, { awayScore: number; homeScore: number }>>(
     new Map(),
   );
@@ -206,6 +215,37 @@ export function MultiScoreboardCard({
     };
   }, []);
 
+  useEffect(() => {
+    const previewGame = primaryGame ?? games[0];
+
+    if (!debugGoalFlash || !previewGame) {
+      return;
+    }
+
+    setManualGoalFlash({
+      key: debugGoalFlash.key,
+      team:
+        debugGoalFlash.alignment === 'away'
+          ? previewGame.awayTeam
+          : previewGame.homeTeam,
+      alignment: debugGoalFlash.alignment,
+    });
+  }, [debugGoalFlash, games, primaryGame]);
+
+  useEffect(() => {
+    if (!manualGoalFlash) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setManualGoalFlash((currentGoalFlash) =>
+        currentGoalFlash?.key === manualGoalFlash.key ? null : currentGoalFlash,
+      );
+    }, GOAL_FLASH_DURATION_MS);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [manualGoalFlash]);
+
   if (!games.length) {
     return (
       <div
@@ -214,6 +254,7 @@ export function MultiScoreboardCard({
         data-layout={layout}
       >
         <div className="scoreboard-empty">{emptyLabel}</div>
+        <ScorebugCreditWatermark visible={showCreditReveal} />
       </div>
     );
   }
@@ -343,10 +384,18 @@ export function MultiScoreboardCard({
       {!isCompact ? (
         <div className="scorebug-footer">
           <div className="series-line">
-            {showCreditReveal ? CREDIT_LABEL : getFooterText(games.length)}
+            {getFooterText(games.length)}
           </div>
         </div>
       ) : null}
+      {manualGoalFlash ? (
+        <GoalFlash
+          key={manualGoalFlash.key}
+          goalFlash={manualGoalFlash}
+          animationStyle={goalAnimation}
+        />
+      ) : null}
+      <ScorebugCreditWatermark visible={showCreditReveal} />
     </div>
   );
 }
