@@ -31,6 +31,24 @@ function parseBoolean(value: string | null, fallback: boolean): boolean {
   return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
 }
 
+function parseOptionalBoolean(value: string | null): boolean | undefined {
+  if (value === null) {
+    return undefined;
+  }
+
+  const normalized = value.toLowerCase();
+
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
+}
+
 function normalizeTeams(values: string[]): string[] {
   return Array.from(
     new Set(
@@ -100,6 +118,71 @@ export function parseConfig(search: string): OverlayConfig {
     muted: parseBoolean(params.get('mute'), DEFAULT_CONFIG.muted),
     showCredit: true,
     unlockToken: params.get('unlock') || undefined,
+  };
+}
+
+/**
+ * Parses only settings explicitly and validly supplied in a URL. This lets a
+ * public saved profile provide defaults without changing legacy URL behavior.
+ */
+export function parseConfigOverrides(search: string): Partial<OverlayConfig> {
+  const params = new URLSearchParams(search);
+  const overrides: Partial<OverlayConfig> = {};
+  const sport = params.get('sport');
+  const style = params.get('style');
+  const goalAnimation = params.get('goalAnimation') ?? params.get('goal');
+  const teams = params.get('teams');
+  const legacyTeam = params.get('team');
+  const gameIdRaw = params.get('gameId');
+  const refreshRaw = params.get('refresh');
+
+  if (isSport(sport)) overrides.sport = sport;
+  if (style && isOverlayStyle(style)) overrides.style = style;
+  if (params.get('layout') === 'stacked' || params.get('layout') === 'compact') {
+    overrides.layout = params.get('layout') as OverlayConfig['layout'];
+  }
+  if (goalAnimation && isGoalAnimationStyle(goalAnimation)) {
+    overrides.goalAnimation = goalAnimation;
+  }
+  if (refreshRaw !== null && Number.isFinite(Number(refreshRaw))) {
+    overrides.refreshSeconds = normalizeRefreshSeconds(refreshRaw);
+  }
+
+  const playoffsOnly = parseOptionalBoolean(params.get('playoffs'));
+  const showClock = parseOptionalBoolean(params.get('clock'));
+  const muted = parseOptionalBoolean(params.get('mute'));
+  if (playoffsOnly !== undefined) overrides.playoffsOnly = playoffsOnly;
+  if (showClock !== undefined) overrides.showClock = showClock;
+  if (muted !== undefined) overrides.muted = muted;
+
+  if (teams !== null || legacyTeam !== null) {
+    overrides.teams = teams
+      ? normalizeTeams(teams.split(','))
+      : normalizeTeams([legacyTeam ?? '']);
+    overrides.mode = 'auto';
+    overrides.gameId = undefined;
+  }
+
+  if (gameIdRaw !== null) {
+    const gameId = Number(gameIdRaw);
+    if (Number.isFinite(gameId) && gameId > 0) {
+      overrides.gameId = gameId;
+      overrides.mode = 'manual';
+    }
+  }
+
+  return overrides;
+}
+
+export function mergeConfigOverrides(
+  base: OverlayConfig,
+  overrides: Partial<OverlayConfig>,
+): OverlayConfig {
+  return {
+    ...base,
+    ...overrides,
+    showCredit: true,
+    unlockToken: undefined,
   };
 }
 

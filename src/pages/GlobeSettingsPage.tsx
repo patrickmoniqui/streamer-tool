@@ -5,6 +5,8 @@ import {
   clearGlobeSession,
   createGlobeSessionId,
   fetchGlobeCheckIns,
+  fetchGlobeProfile,
+  saveGlobeProfile,
   getGlobeSessionId,
   normalizeTwitchChannel,
   removeGlobeCheckIn,
@@ -13,6 +15,14 @@ import {
   type GlobeConfig,
 } from '../lib/globe';
 import { GlobeScene } from './GlobeOverlayPage';
+import {
+  buildTwitchConnectUrl,
+  completeTwitchConnect,
+  getTwitchConnectToken,
+  refreshTwitchConnectToken,
+  isTwitchConnectConfigured,
+  type TwitchIdentity,
+} from '../lib/twitchConnect';
 
 const STORAGE_KEY = 'keylight-globe-settings';
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -110,6 +120,12 @@ export function GlobeSettingsPage() {
   const canUseTestingTools =
     import.meta.env.DEV || LOCAL_HOSTNAMES.has(window.location.hostname);
   const [config, setConfig] = useState<GlobeConfig>(() => loadStoredConfig());
+  const [twitchIdentity, setTwitchIdentity] = useState<TwitchIdentity | null>(null);
+  const [checkingTwitch, setCheckingTwitch] = useState(true);
+  const [twitchError, setTwitchError] = useState<string | null>(null);
+  const [savedConfig, setSavedConfig] = useState<GlobeConfig | null>(null);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'failed'>('idle');
   const [clearStatus, setClearStatus] = useState<'idle' | 'clearing' | 'cleared' | 'failed'>(
     'idle',
@@ -125,12 +141,69 @@ export function GlobeSettingsPage() {
     requestId: number;
   } | null>(null);
   const testFocusRequestIdRef = useRef(0);
-  const overlayUrl = useMemo(() => buildGlobeOverlayUrl(config), [config]);
+  const hasChannel = /^[a-z0-9_]+$/.test(config.channel);
+  const overlayUrl = useMemo(
+    () => savedConfig ? buildGlobeOverlayUrl(savedConfig) : '',
+    [savedConfig],
+  );
+  const hasUnsavedChanges = !savedConfig || (
+    config.channel !== savedConfig.channel ||
+    config.animateCheckIns !== savedConfig.animateCheckIns ||
+    config.zoomAnimation !== savedConfig.zoomAnimation ||
+    config.showLabels !== savedConfig.showLabels ||
+    config.transparent !== savedConfig.transparent ||
+    config.globeColor !== savedConfig.globeColor
+  );
+  const canSave = hasChannel && twitchIdentity?.login === config.channel && !checkingTwitch;
   const previewCheckIns = canUseTestingTools ? localPreviewCheckIns : PREVIEW_CHECK_INS;
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }, [config]);
+
+  useEffect(() => {
+    let active = true;
+
+    void completeTwitchConnect()
+      .then(async (identity) => {
+        if (!active) return;
+        setTwitchIdentity(identity);
+
+        if (identity) {
+          const channel = identity.login;
+          setConfig((current) => ({ ...current, channel, sessionId: channel }));
+          const saved = await fetchGlobeProfile(channel);
+          if (active && saved) {
+            setConfig(saved);
+            setSavedConfig(saved);
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) {
+          setTwitchError(error instanceof Error ? error.message : 'Unable to connect to Twitch. Please try again.');
+        }
+      })
+      .finally(() => {
+        if (active) setCheckingTwitch(false);
+      });
+
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!twitchIdentity) return;
+    let active = true;
+    const interval = window.setInterval(() => {
+      void refreshTwitchConnectToken().then((valid) => {
+        if (active && !valid) {
+          setTwitchIdentity(null);
+          setTwitchError('Your Twitch connection has expired. Connect again to save changes.');
+        }
+      });
+    }, 60 * 60 * 1000);
+    return () => { active = false; window.clearInterval(interval); };
+  }, [twitchIdentity]);
 
   useEffect(() => {
     if (!canUseTestingTools) {
@@ -169,11 +242,45 @@ export function GlobeSettingsPage() {
   }, [clearStatus]);
 
   async function copyOverlayUrl() {
+    if (!overlayUrl) {
+      return;
+    }
+
     try {
       await navigator.clipboard.writeText(overlayUrl);
       setCopyStatus('copied');
     } catch {
       setCopyStatus('failed');
+    }
+  }
+
+  function connectTwitch() {
+    try {
+      setTwitchError(null);
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
+      window.location.assign(buildTwitchConnectUrl());
+    } catch (error) {
+      setTwitchError(error instanceof Error ? error.message : 'Unable to start Twitch sign-in. Please try again.');
+    }
+  }
+
+  async function saveSettings() {
+    if (!canSave || saveStatus === 'saving') return;
+    const token = getTwitchConnectToken();
+    if (!token) {
+      setSaveError('Reconnect with Twitch before saving your globe settings.');
+      setSaveStatus('failed');
+      return;
+    }
+    setSaveStatus('saving');
+    setSaveError(null);
+    try {
+      const saved = await saveGlobeProfile(config, token);
+      setSavedConfig(saved);
+      setSaveStatus('saved');
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Unable to save globe settings.');
+      setSaveStatus('failed');
     }
   }
 
@@ -217,7 +324,7 @@ export function GlobeSettingsPage() {
       );
 
       if (checkIn) {
-        if (config.animateCheckIns) {
+        if (config.animateCheckIns || config.zoomAnimation) {
           testFocusRequestIdRef.current += 1;
           setTestFocusCheckIn({
             checkIn,
@@ -296,31 +403,37 @@ export function GlobeSettingsPage() {
               <p>Connect a channel, then choose how its check-ins appear.</p>
             </div>
           </div>
+          <div className="globe-session-card">
+            <p className="supporter-label">Twitch connection</p>
+            <p className="supporter-copy">
+              {twitchIdentity
+                ? `Channel selected from Twitch: ${twitchIdentity.login}.`
+                : 'Connect with Twitch to automatically select your channel.'}
+            </p>
+            <button
+              className="secondary-button full-width-button"
+              type="button"
+              disabled={checkingTwitch || !isTwitchConnectConfigured()}
+              onClick={connectTwitch}
+            >
+              {checkingTwitch ? 'Checking Twitch connection…'
+                : twitchIdentity ? 'Switch Twitch account' : 'Connect with Twitch'}
+            </button>
+            {!isTwitchConnectConfigured() ? (
+              <p className="helper-text">Twitch connection is currently unavailable.</p>
+            ) : null}
+            {twitchError ? <p className="helper-text helper-error" role="alert">{twitchError}</p> : null}
+          </div>
           <label className="field">
             <span>Twitch channel</span>
             <input
               className="admin-input"
               value={config.channel}
-              placeholder="djmoneykey"
-              onChange={(event) => {
-                const channel = normalizeTwitchChannel(event.target.value);
-                setConfig((current) => ({
-                  ...current,
-                  channel,
-                  sessionId: getGlobeSessionId(
-                    channel,
-                    current.channel ? '' : current.sessionId,
-                  ),
-                }));
-                setClearStatus('idle');
-                setTestStatus('idle');
-                setLocalPreviewCheckIns([]);
-                setTestFocusCheckIn(null);
-              }}
+              placeholder="Connect with Twitch to select your channel"
+              readOnly
             />
             <span className="field-hint">
-              Use the channel login only. It identifies the channel's shared globe
-              session and listens anonymously for public chat messages.
+              Selected from your Twitch account. Connect again to switch channels.
             </span>
           </label>
 
@@ -328,6 +441,7 @@ export function GlobeSettingsPage() {
             <input
               type="checkbox"
               checked={config.showLabels}
+              disabled={checkingTwitch || saveStatus === 'saving'}
               onChange={(event) =>
                 setConfig((current) => ({
                   ...current,
@@ -342,6 +456,7 @@ export function GlobeSettingsPage() {
             <input
               type="checkbox"
               checked={config.animateCheckIns}
+              disabled={checkingTwitch || saveStatus === 'saving'}
               onChange={(event) => {
                 const animateCheckIns = event.target.checked;
                 setConfig((current) => ({
@@ -349,7 +464,7 @@ export function GlobeSettingsPage() {
                   animateCheckIns,
                 }));
 
-                if (!animateCheckIns) {
+                if (!animateCheckIns && !config.zoomAnimation) {
                   setTestFocusCheckIn((current) => {
                     if (current) {
                       setLocalPreviewCheckIns((checkIns) => [
@@ -374,7 +489,22 @@ export function GlobeSettingsPage() {
           <label className="toggle">
             <input
               type="checkbox"
+              checked={config.zoomAnimation}
+              disabled={checkingTwitch || saveStatus === 'saving'}
+              onChange={(event) => setConfig((current) => ({
+                ...current,
+                zoomAnimation: event.target.checked,
+              }))}
+            />
+            Zoom animation
+          </label>
+          <p className="field-hint">Zoom toward new check-ins, then return to the normal view.</p>
+
+          <label className="toggle">
+            <input
+              type="checkbox"
               checked={config.transparent}
+              disabled={checkingTwitch || saveStatus === 'saving'}
               onChange={(event) =>
                 setConfig((current) => ({
                   ...current,
@@ -390,6 +520,7 @@ export function GlobeSettingsPage() {
             <input
               className="admin-input"
               type="color"
+              disabled={checkingTwitch || saveStatus === 'saving'}
               value={config.globeColor}
               onChange={(event) =>
                 setConfig((current) => ({
@@ -501,21 +632,45 @@ export function GlobeSettingsPage() {
             <div>
               <p className="panel-kicker">Go live</p>
               <h2>Preview &amp; publish</h2>
-              <p>Copy the browser-source URL when the globe looks right.</p>
+              <p>Save your settings, then copy your permanent browser-source URL.</p>
             </div>
           </div>
           <div>
             <p className="eyebrow">OBS Browser Source</p>
             <h3>Overlay URL</h3>
             <p className="header-copy">
-              Add this URL as a browser source. Every overlay using the same Twitch
-              channel shares one globe and marker list.
+              Add this URL to OBS once. Save changes here to update your globe
+              without replacing the link.
             </p>
           </div>
-          <textarea className="globe-overlay-url" readOnly value={overlayUrl} rows={5} />
-          <button className="primary-button" type="button" onClick={copyOverlayUrl}>
+          <button
+            className="primary-button"
+            type="button"
+            disabled={!canSave || !hasUnsavedChanges || saveStatus === 'saving'}
+            onClick={saveSettings}
+          >
+            {saveStatus === 'saving' ? 'Saving…' : 'Save changes'}
+          </button>
+          {saveError ? <p className="helper-text helper-error" role="alert">{saveError}</p> : null}
+          {savedConfig ? (
+            <p className="helper-text" role="status">
+              {hasUnsavedChanges ? 'You have unsaved changes.' : 'Settings saved. OBS updates automatically within a few seconds.'}
+            </p>
+          ) : null}
+          <textarea
+            className="globe-overlay-url"
+            aria-label="Globe overlay URL"
+            readOnly
+            value={overlayUrl}
+            placeholder="Connect with Twitch and save your settings to get your permanent OBS link."
+            rows={2}
+          />
+          <button className="primary-button" type="button" disabled={!overlayUrl} onClick={copyOverlayUrl}>
             {copyStatus === 'copied' ? 'Copied' : 'Copy overlay URL'}
           </button>
+          {!overlayUrl ? (
+            <p className="helper-text">Connect with Twitch and save your settings before copying your OBS link.</p>
+          ) : null}
           {copyStatus === 'failed' ? (
             <p className="helper-text helper-error">
               Clipboard access failed. Select the URL field manually.

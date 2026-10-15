@@ -7,6 +7,9 @@ import type { GeometryCollection, Topology } from 'topojson-specification';
 import {
   clearGlobeSession,
   fetchGlobeCheckIns,
+  watchGlobeProfile,
+  getGlobeProfileChannel,
+  applyGlobeProfileConfig,
   getGlobeRotationsPerSecond,
   parseGlobeConfig,
   submitGlobeCheckIn,
@@ -14,6 +17,7 @@ import {
   type GlobeConfig,
 } from '../lib/globe';
 import { connectTwitchCheckInChat } from '../lib/twitchChat';
+import { FOCUS_ROTATION_MS, FOCUS_HOLD_MS, FOCUS_RESUME_MS, getGlobeFocusCameraDistance } from '../lib/globeAnimation';
 
 const GLOBE_RADIUS = 1;
 const GLOBE_FILL_RADIUS = GLOBE_RADIUS * 0.999;
@@ -25,9 +29,6 @@ const MARKER_LABEL_RADIUS = 1.145;
 const MARKER_ENVELOPE_VIEWPORT_HEIGHT = 0.8;
 const DEFAULT_CAMERA_Z =
   (BASE_CAMERA_Z * MARKER_LABEL_RADIUS) / MARKER_ENVELOPE_VIEWPORT_HEIGHT;
-const FOCUS_ROTATION_MS = 3_200;
-const FOCUS_HOLD_MS = 900;
-const FOCUS_RESUME_MS = 2_000;
 const GLOBE_TILT_X = 0;
 const INITIAL_GLOBE_YAW = -0.55;
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
@@ -749,7 +750,7 @@ export function GlobeScene({
   config: GlobeConfig;
   cameraDistance?: number;
   className?: string;
-  focusCheckIn?: { checkIn: GlobeCheckIn; requestId: number } | null;
+  focusCheckIn?: { checkIn: GlobeCheckIn; requestId: number; zoom?: boolean } | null;
   globeTiltX?: number;
   globeTiltZ?: number;
   onFocusMarkerPlace?: (checkIn: GlobeCheckIn) => void;
@@ -770,6 +771,7 @@ export function GlobeScene({
   const focusAnimationRef = useRef<{
     checkIn: GlobeCheckIn;
     markerPlaced: boolean;
+    zoom: boolean;
     resumeQuaternion: THREE.Quaternion;
     startedAt: number;
     startQuaternion: THREE.Quaternion;
@@ -780,13 +782,15 @@ export function GlobeScene({
   const globeTiltZRef = useRef(globeTiltZ);
   const rotationSpeedRef = useRef(config.rotationSpeed);
   const showLabelsRef = useRef(config.showLabels);
+  const zoomAnimationRef = useRef(config.zoomAnimation);
   const onFocusMarkerPlaceRef = useRef(onFocusMarkerPlace);
   const onFocusCompleteRef = useRef(onFocusComplete);
 
   useEffect(() => {
     rotationSpeedRef.current = config.rotationSpeed;
     showLabelsRef.current = config.showLabels;
-  }, [config.rotationSpeed, config.showLabels]);
+    zoomAnimationRef.current = config.zoomAnimation;
+  }, [config.rotationSpeed, config.showLabels, config.zoomAnimation]);
 
   useEffect(() => {
     globeTiltXRef.current = globeTiltX;
@@ -904,6 +908,9 @@ export function GlobeScene({
       if (focusAnimation) {
         const elapsed = performance.now() - focusAnimation.startedAt;
         const totalDuration = FOCUS_ROTATION_MS + FOCUS_HOLD_MS + FOCUS_RESUME_MS;
+        camera.position.z = getGlobeFocusCameraDistance(
+          cameraDistance, elapsed, focusAnimation.zoom && zoomAnimationRef.current,
+        );
 
         if (elapsed <= FOCUS_ROTATION_MS) {
           const progress = easeInOutCubic(elapsed / FOCUS_ROTATION_MS);
@@ -912,10 +919,8 @@ export function GlobeScene({
             focusAnimation.targetQuaternion,
             progress,
           );
-          camera.position.z = cameraDistance;
         } else if (elapsed <= FOCUS_ROTATION_MS + FOCUS_HOLD_MS) {
           globeGroup.quaternion.copy(focusAnimation.targetQuaternion);
-          camera.position.z = cameraDistance;
 
           if (!focusAnimation.markerPlaced) {
             focusAnimation.markerPlaced = true;
@@ -930,7 +935,6 @@ export function GlobeScene({
             focusAnimation.resumeQuaternion,
             progress,
           );
-          camera.position.z = cameraDistance;
         } else {
           if (!focusAnimation.markerPlaced) {
             focusAnimation.markerPlaced = true;
@@ -943,6 +947,7 @@ export function GlobeScene({
           onFocusCompleteRef.current?.(focusAnimation.checkIn);
         }
       } else {
+        camera.position.z = cameraDistance;
         const rotationsPerSecond = getGlobeRotationsPerSecond(
           rotationSpeedRef.current,
         );
@@ -1086,6 +1091,7 @@ export function GlobeScene({
 
     if (!focusCheckIn) {
       focusAnimationRef.current = null;
+      if (camera) camera.position.z = cameraDistance;
       return;
     }
 
@@ -1120,6 +1126,7 @@ export function GlobeScene({
     focusAnimationRef.current = {
       checkIn: focusCheckIn.checkIn,
       markerPlaced: false,
+      zoom: focusCheckIn.zoom !== false,
       resumeQuaternion,
       startedAt: performance.now(),
       startQuaternion: globeGroup.quaternion.clone(),
@@ -1256,21 +1263,31 @@ function getCheckInFocusKey(checkIn: GlobeCheckIn): string {
 }
 
 export function GlobeOverlayPage() {
-  const config = useMemo(() => parseGlobeConfig(window.location.search), []);
+  const profileChannel = useMemo(() => getGlobeProfileChannel(window.location.pathname, window.location.hash), []);
+  const [config, setConfig] = useState(() => parseGlobeConfig(window.location.search, profileChannel));
   const isLocalRuntime =
     import.meta.env.DEV || LOCAL_HOSTNAMES.has(window.location.hostname);
   const [checkIns, setCheckIns] = useState<GlobeCheckIn[]>([]);
   const [focusCheckIn, setFocusCheckIn] = useState<{
     checkIn: GlobeCheckIn;
     requestId: number;
+    zoom?: boolean;
   } | null>(null);
   const [status, setStatus] = useState('Starting globe');
   const checkInsRef = useRef<GlobeCheckIn[]>([]);
   const focusCheckInRef = useRef<typeof focusCheckIn>(null);
-  const focusQueueRef = useRef<GlobeCheckIn[]>([]);
+  const focusQueueRef = useRef<{ checkIn: GlobeCheckIn; zoom: boolean }[]>([]);
   const queuedFocusKeysRef = useRef(new Set<string>());
   const pendingLocationsRef = useRef(new Set<string>());
   const focusRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    if (!profileChannel) return;
+    return watchGlobeProfile(profileChannel, (saved) => {
+      const next = applyGlobeProfileConfig(saved, window.location.search);
+      setConfig((current) => JSON.stringify(current) === JSON.stringify(next) ? current : next);
+    });
+  }, [profileChannel]);
 
   useEffect(() => {
     checkInsRef.current = checkIns;
@@ -1280,16 +1297,17 @@ export function GlobeOverlayPage() {
     focusCheckInRef.current = focusCheckIn;
   }, [focusCheckIn]);
 
-  function startFocusCheckIn(checkIn: GlobeCheckIn) {
+  function startFocusCheckIn(checkIn: GlobeCheckIn, zoom = true) {
     focusRequestIdRef.current += 1;
     setFocusCheckIn({
       checkIn,
       requestId: focusRequestIdRef.current,
+      zoom,
     });
   }
 
-  function focusExistingCheckIn(checkIn: GlobeCheckIn) {
-    if (!config.animateCheckIns) {
+  function focusExistingCheckIn(checkIn: GlobeCheckIn, zoom = true) {
+    if (!config.animateCheckIns && !(zoom && config.zoomAnimation)) {
       setCheckIns((current) => upsertCheckIn(current, checkIn));
       return;
     }
@@ -1307,11 +1325,11 @@ export function GlobeOverlayPage() {
 
     if (currentFocus) {
       queuedFocusKeysRef.current.add(focusKey);
-      focusQueueRef.current.push(checkIn);
+      focusQueueRef.current.push({ checkIn, zoom });
       return;
     }
 
-    startFocusCheckIn(checkIn);
+    startFocusCheckIn(checkIn, zoom);
   }
 
   function clearFocusQueue() {
@@ -1324,20 +1342,20 @@ export function GlobeOverlayPage() {
     queuedFocusKeysRef.current.delete(completedFocusKey);
 
     while (focusQueueRef.current.length > 0) {
-      const nextCheckIn = focusQueueRef.current.shift();
+      const next = focusQueueRef.current.shift();
 
-      if (!nextCheckIn) {
+      if (!next) {
         continue;
       }
 
-      const nextFocusKey = getCheckInFocusKey(nextCheckIn);
+      const nextFocusKey = getCheckInFocusKey(next.checkIn);
       queuedFocusKeysRef.current.delete(nextFocusKey);
 
       if (completedFocusKey === nextFocusKey) {
         continue;
       }
 
-      startFocusCheckIn(nextCheckIn);
+      startFocusCheckIn(next.checkIn, next.zoom);
       return;
     }
 
@@ -1350,11 +1368,11 @@ export function GlobeOverlayPage() {
   }
 
   useEffect(() => {
-    if (!config.animateCheckIns) {
+    if (!config.animateCheckIns && !config.zoomAnimation) {
       clearFocusQueue();
       setFocusCheckIn(null);
     }
-  }, [config.animateCheckIns]);
+  }, [config.animateCheckIns, config.zoomAnimation]);
 
   function resetGlobeSession() {
     clearFocusQueue();
@@ -1409,7 +1427,7 @@ export function GlobeOverlayPage() {
           return !current || current.updatedAt < checkIn.updatedAt;
         });
 
-        if (changedCheckIns.length > 0 && config.animateCheckIns) {
+        if (changedCheckIns.length > 0 && (config.animateCheckIns || config.zoomAnimation)) {
           const changedViewerKeys = new Set(
             changedCheckIns.map((checkIn) => checkIn.viewerName.toLowerCase()),
           );
@@ -1450,7 +1468,7 @@ export function GlobeOverlayPage() {
         window.clearInterval(intervalId);
       }
     };
-  }, [config.animateCheckIns, config.sessionId, isLocalRuntime]);
+  }, [config.animateCheckIns, config.zoomAnimation, config.sessionId, isLocalRuntime]);
 
   useEffect(() => {
     return connectTwitchCheckInChat({
@@ -1467,7 +1485,7 @@ export function GlobeOverlayPage() {
           );
 
           if (existingCheckIn) {
-            focusExistingCheckIn(existingCheckIn);
+            focusExistingCheckIn(existingCheckIn, false);
           }
 
           return;
@@ -1499,7 +1517,7 @@ export function GlobeOverlayPage() {
           });
       },
     });
-  }, [config.animateCheckIns, config.channel, config.sessionId]);
+  }, [config.animateCheckIns, config.zoomAnimation, config.channel, config.sessionId]);
 
   return (
     <main className={config.transparent ? 'globe-overlay is-transparent' : 'globe-overlay'}>

@@ -27,3 +27,10 @@ CREATE TABLE IF NOT EXISTS globe_checkins (
 
 CREATE INDEX IF NOT EXISTS idx_globe_checkins_session_updated
   ON globe_checkins(session_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS globe_profiles (
+  twitch_user_id TEXT PRIMARY KEY NOT NULL,
+  channel TEXT UNIQUE NOT NULL,
+  config_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);

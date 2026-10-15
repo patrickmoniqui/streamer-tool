@@ -10,6 +10,12 @@ import {
   type TwitchGateStatus,
 } from '../lib/twitchGate';
 import {
+  buildPersistentOverlayUrl,
+  fetchMyGameScoreProfile,
+  saveMyGameScoreProfile,
+  type GameScoreProfile,
+} from '../lib/gameScoreProfile';
+import {
   buildTrackedLiveGoalOverlayUrl,
   buildTrackedOverlayUrl,
   getAnalyticsInstallId,
@@ -125,10 +131,15 @@ export function SettingsPage() {
     null,
   );
   const [twitchGateError, setTwitchGateError] = useState<string | null>(null);
+  const [savedProfile, setSavedProfile] = useState<GameScoreProfile | null>(null);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<string | null>(null);
+  const [persistentCopied, setPersistentCopied] = useState(false);
   const [draggedTeamIndex, setDraggedTeamIndex] = useState<number | null>(null);
   const [dragOverTeamIndex, setDragOverTeamIndex] = useState<number | null>(null);
   const overlayLinkRef = useRef<HTMLTextAreaElement | null>(null);
   const liveGoalLinkRef = useRef<HTMLTextAreaElement | null>(null);
+  const persistentLinkRef = useRef<HTMLTextAreaElement | null>(null);
   const lastOverlayLinkCopyTrackedAtRef = useRef(0);
   const lastLiveGoalLinkCopyTrackedAtRef = useRef(0);
   const { data, error, loading } = useOverlayData(config);
@@ -158,6 +169,9 @@ export function SettingsPage() {
         : `${config.teams.length} teams selected`;
   const trackedOverlayUrl = buildTrackedOverlayUrl(config, installId);
   const trackedLiveGoalOverlayUrl = buildTrackedLiveGoalOverlayUrl(config, installId);
+  const persistentOverlayUrl = savedProfile
+    ? buildPersistentOverlayUrl(savedProfile.profileId)
+    : null;
 
   useEffect(() => {
     const nextSearch = new URL(buildOverlayUrl(config)).search;
@@ -189,6 +203,15 @@ export function SettingsPage() {
   }, [liveGoalCopied]);
 
   useEffect(() => {
+    if (!persistentCopied) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => setPersistentCopied(false), 1_500);
+    return () => window.clearTimeout(timeoutId);
+  }, [persistentCopied]);
+
+  useEffect(() => {
     if (!twitchGateEnabled) {
       return;
     }
@@ -203,6 +226,18 @@ export function SettingsPage() {
           ...current,
           unlockToken: status.entitled ? status.overlayToken ?? undefined : undefined,
         }));
+
+        if (!status.authenticated) {
+          setSavedProfile(null);
+          return;
+        }
+
+        return fetchMyGameScoreProfile(controller.signal).then((profile) => {
+          if (profile) {
+            setSavedProfile(profile);
+            setConfig(profile.config);
+          }
+        });
       })
       .catch((fetchError) => {
         if (controller.signal.aborted) {
@@ -293,6 +328,23 @@ export function SettingsPage() {
       pathname: '/live-goal/overlay.html',
     });
     setLiveGoalCopied(true);
+  }
+
+  async function saveProfile() {
+    setProfileSaving(true);
+    setProfileMessage(null);
+
+    try {
+      const profile = await saveMyGameScoreProfile(config);
+      setSavedProfile(profile);
+      setProfileMessage('Saved. Reload your OBS browser source to apply these settings.');
+    } catch (saveError) {
+      setProfileMessage(
+        saveError instanceof Error ? saveError.message : 'Unable to save your profile.',
+      );
+    } finally {
+      setProfileSaving(false);
+    }
   }
 
   function triggerPreviewGoal(alignment: 'away' | 'home') {
@@ -767,19 +819,16 @@ export function SettingsPage() {
 
           {twitchGateEnabled ? (
             <div className="supporter-card">
-              <p className="supporter-label">Twitch Supporter Unlock</p>
+              <p className="supporter-label">Saved Twitch Profile</p>
               <p className="supporter-copy">
-                Follow <strong>DJMoneyKey</strong> on Twitch to unlock supporter-only
-                options in the future. The flag is off by default, so this stays
-                dormant until you opt in.
+                Connect Twitch to save these settings and get one permanent OBS
+                link. Your existing query-string links still work exactly as they do now.
               </p>
               {twitchGateStatus ? (
                 <p className="supporter-status">
-                  {twitchGateStatus.entitled
-                    ? `Connected as ${twitchGateStatus.login}. Follower check passed.`
-                    : twitchGateStatus.authenticated
-                      ? `Connected as ${twitchGateStatus.login}, but follower check has not passed yet.`
-                      : 'Not connected to Twitch.'}
+                  {twitchGateStatus.authenticated
+                    ? `Connected as ${twitchGateStatus.login}.`
+                    : 'Not connected to Twitch.'}
                 </p>
               ) : null}
               {twitchGateError ? (
@@ -790,11 +839,55 @@ export function SettingsPage() {
                   Connect Twitch
                 </a>
                 {twitchGateStatus?.authenticated ? (
-                  <a className="ghost-link" href={buildTwitchLogoutUrl()}>
-                    Sign out
-                  </a>
+                  <>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      onClick={() => void saveProfile()}
+                      disabled={profileSaving}
+                    >
+                      {profileSaving ? 'Saving…' : 'Save to my profile'}
+                    </button>
+                    <a className="ghost-link" href={buildTwitchLogoutUrl()}>
+                      Sign out
+                    </a>
+                  </>
                 ) : null}
               </div>
+              {profileMessage ? (
+                <p className="helper-text">{profileMessage}</p>
+              ) : null}
+              {persistentOverlayUrl ? (
+                <div className="field">
+                  <span>Persistent overlay link</span>
+                  <textarea
+                    ref={persistentLinkRef}
+                    readOnly
+                    value={persistentOverlayUrl}
+                    rows={3}
+                    onCopy={() => setPersistentCopied(true)}
+                  />
+                  <small className="field-hint">
+                    This link loads your saved settings when OBS is reloaded. Add a
+                    query parameter such as <code>&amp;style=minimal</code> to override
+                    that setting for this link only.
+                  </small>
+                  <button
+                    className="secondary-button full-width-button"
+                    type="button"
+                    onClick={() =>
+                      void copyUrl(
+                        persistentOverlayUrl,
+                        persistentLinkRef,
+                        () => setPersistentCopied(true),
+                        'persistent overlay link',
+                      )
+                    }
+                  >
+                    {persistentCopied ? 'Copied' : 'Copy persistent overlay link'}
+                  </button>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -826,7 +919,7 @@ export function SettingsPage() {
           </div>
           <div className="preview-link-panel">
             <div className="field">
-              <span>Overlay link</span>
+              <span>Portable overlay link</span>
               <textarea
                 ref={overlayLinkRef}
                 readOnly
@@ -848,7 +941,7 @@ export function SettingsPage() {
                 )
               }
             >
-              {overlayCopied ? 'Copied' : 'Copy overlay link'}
+              {overlayCopied ? 'Copied' : 'Copy portable overlay link'}
             </button>
             {copyError ? <p className="helper-text helper-error">{copyError}</p> : null}
           </div>

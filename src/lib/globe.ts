@@ -2,6 +2,7 @@ import { getApiBaseUrl } from './config';
 
 export interface GlobeConfig {
   animateCheckIns: boolean;
+  zoomAnimation: boolean;
   channel: string;
   sessionId: string;
   rotationSpeed: number;
@@ -26,6 +27,7 @@ export interface GlobeCheckIn {
 
 export const DEFAULT_GLOBE_CONFIG: GlobeConfig = {
   animateCheckIns: false,
+  zoomAnimation: false,
   channel: '',
   sessionId: '',
   rotationSpeed: 1 / 15,
@@ -78,9 +80,9 @@ export function getGlobeSessionId(
   return normalizeTwitchChannel(channel) || fallbackSessionId || createGlobeSessionId();
 }
 
-export function parseGlobeConfig(search: string): GlobeConfig {
+export function parseGlobeConfig(search: string, profileChannel = ''): GlobeConfig {
   const params = new URLSearchParams(search);
-  const channel = normalizeTwitchChannel(params.get('channel') ?? '');
+  const channel = normalizeTwitchChannel(profileChannel || params.get('channel') || '');
 
   return {
     animateCheckIns: parseBoolean(
@@ -88,6 +90,7 @@ export function parseGlobeConfig(search: string): GlobeConfig {
       DEFAULT_GLOBE_CONFIG.animateCheckIns,
     ),
     channel,
+    zoomAnimation: parseBoolean(params.get('zoom'), DEFAULT_GLOBE_CONFIG.zoomAnimation),
     sessionId: getGlobeSessionId(channel, params.get('session')?.trim()),
     rotationSpeed: DEFAULT_GLOBE_CONFIG.rotationSpeed,
     showLabels: parseBoolean(params.get('labels'), DEFAULT_GLOBE_CONFIG.showLabels),
@@ -104,21 +107,82 @@ export function parseGlobeConfig(search: string): GlobeConfig {
 
 export function buildGlobeOverlayUrl(config: GlobeConfig): string {
   const channel = normalizeTwitchChannel(config.channel);
-  const sessionId = getGlobeSessionId(channel, config.sessionId);
-  const overlayUrl = channel
-    ? new URL(`./${encodeURIComponent(channel)}`, window.location.href)
-    : new URL('./overlay.html', window.location.href);
+  if (!/^[a-z0-9_]+$/.test(channel)) {
+    return '';
+  }
+  const settingsUrl = new URL(window.location.href);
 
-  if (!channel) {
-    overlayUrl.searchParams.set('session', sessionId);
+  // Treat the extensionless settings route as a directory, even without a trailing slash.
+  if (!settingsUrl.pathname.endsWith('/') && !settingsUrl.pathname.endsWith('.html')) {
+    settingsUrl.pathname += '/';
   }
 
-  overlayUrl.searchParams.set('animations', config.animateCheckIns ? '1' : '0');
-  overlayUrl.searchParams.set('labels', config.showLabels ? '1' : '0');
-  overlayUrl.searchParams.set('transparent', config.transparent ? '1' : '0');
-  overlayUrl.searchParams.set('color', normalizeGlobeColor(config.globeColor, DEFAULT_GLOBE_CONFIG.globeColor));
+  return new URL(`./${encodeURIComponent(channel)}`, settingsUrl).toString();
+}
 
-  return overlayUrl.toString();
+export function getGlobeProfileChannel(pathname: string, hash = ''): string {
+  const pathChannel = pathname.match(/\/globe\/([A-Za-z0-9_]+)\/?$/)?.[1];
+  const channel = normalizeTwitchChannel(pathChannel || new URLSearchParams(hash.slice(1)).get('channel') || '');
+  return /^[a-z0-9_]+$/.test(channel) ? channel : '';
+}
+
+export function applyGlobeProfileConfig(config: GlobeConfig, search = ''): GlobeConfig {
+  const params = new URLSearchParams(search);
+  const overrides = parseGlobeConfig(search, config.channel);
+  return {
+    ...config,
+    sessionId: config.channel,
+    rotationSpeed: DEFAULT_GLOBE_CONFIG.rotationSpeed,
+    animateCheckIns: params.has('animations') ? overrides.animateCheckIns : config.animateCheckIns,
+    zoomAnimation: params.has('zoom') ? overrides.zoomAnimation : config.zoomAnimation ?? false,
+    showLabels: params.has('labels') ? overrides.showLabels : config.showLabels,
+    transparent: params.has('transparent') ? overrides.transparent : config.transparent,
+    globeColor: params.has('color') ? overrides.globeColor : config.globeColor,
+  };
+}
+
+export async function fetchGlobeProfile(channel: string, signal?: AbortSignal): Promise<GlobeConfig | null> {
+  const response = await fetch(`${getApiBaseUrl()}/globe/profiles/${encodeURIComponent(channel)}`, {
+    signal, cache: 'no-store',
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error('Unable to load saved globe settings.');
+  const payload = await response.json() as { config: GlobeConfig };
+  return payload.config;
+}
+
+export function watchGlobeProfile(channel: string, onConfig: (config: GlobeConfig) => void): () => void {
+  const controller = new AbortController();
+  let inFlight = false;
+  async function refresh() {
+    if (inFlight || controller.signal.aborted) return;
+    inFlight = true;
+    try {
+      const saved = await fetchGlobeProfile(channel, controller.signal);
+      if (saved && !controller.signal.aborted) onConfig(saved);
+    } catch {
+      // Keep the last working settings and retry on the next interval.
+    } finally {
+      inFlight = false;
+    }
+  }
+  void refresh();
+  const interval = window.setInterval(refresh, 5_000);
+  return () => { controller.abort(); window.clearInterval(interval); };
+}
+
+export async function saveGlobeProfile(config: GlobeConfig, accessToken: string): Promise<GlobeConfig> {
+  const response = await fetch(`${getApiBaseUrl()}/globe/profiles/${encodeURIComponent(config.channel)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ config }),
+  });
+  if (response.status === 401 || response.status === 403) {
+    throw new Error('Reconnect with Twitch before saving your globe settings.');
+  }
+  if (!response.ok) throw new Error('Unable to save globe settings. Please try again.');
+  const payload = await response.json() as { config: GlobeConfig };
+  return payload.config;
 }
 
 export async function fetchGlobeCheckIns(

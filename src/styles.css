@@ -1141,6 +1141,11 @@ textarea {
   cursor: not-allowed;
 }
 
+.primary-button:disabled {
+  opacity: 0.46;
+  cursor: not-allowed;
+}
+
 .full-width-button {
   width: 100%;
 }

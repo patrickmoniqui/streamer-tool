@@ -54,10 +54,10 @@ export default defineConfig(({ command }) => {
             }
 
             requestUrl.pathname = '/globe/overlay.html';
-            requestUrl.searchParams.set('channel', match[1].toLowerCase());
+            requestUrl.hash = new URLSearchParams({ channel: match[1].toLowerCase() }).toString();
             requestUrl.searchParams.delete('speed');
             response.statusCode = 302;
-            response.setHeader('Location', `${requestUrl.pathname}${requestUrl.search}`);
+            response.setHeader('Location', `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`);
             response.end();
           });
         },

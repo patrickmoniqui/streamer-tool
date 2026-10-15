@@ -4,8 +4,6 @@ const ESPN_SOCCER_SCOREBOARD_URL =
 const TWITCH_AUTHORIZE_URL = 'https://id.twitch.tv/oauth2/authorize';
 const TWITCH_TOKEN_URL = 'https://id.twitch.tv/oauth2/token';
 const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
-const TWITCH_FOLLOWED_CHANNELS_URL =
-  'https://api.twitch.tv/helix/channels/followed';
 const SESSION_COOKIE_NAME = 'twitch_gate_session';
 const OAUTH_STATE_COOKIE_NAME = 'twitch_oauth_state';
 
@@ -15,7 +13,6 @@ interface Env {
   SOCCER_SCOREBOARD_URL?: string;
   TWITCH_GATE_ENABLED?: string;
   TWITCH_ALLOWED_ORIGIN?: string;
-  TWITCH_BROADCASTER_ID?: string;
   TWITCH_CLIENT_ID?: string;
   TWITCH_CLIENT_SECRET?: string;
   TWITCH_REDIRECT_URI?: string;
@@ -125,10 +122,6 @@ interface TwitchValidationResponse {
   user_id: string;
 }
 
-interface TwitchFollowedChannelsResponse {
-  data?: Array<{ broadcaster_id: string }>;
-}
-
 interface TwitchGateSession {
   entitled: boolean;
   exp: number;
@@ -140,6 +133,27 @@ interface TwitchGateGrant {
   entitled: boolean;
   exp: number;
   sub: string;
+}
+
+interface GameScoreProfileConfig {
+  sport: 'nhl' | 'soccer';
+  mode: 'auto' | 'manual';
+  style: 'broadcast' | 'classic' | 'minimal' | 'arena';
+  layout: 'compact' | 'stacked';
+  goalAnimation: 'logo-storm' | 'jumbotron' | 'logo-rain';
+  teams: string[];
+  gameId?: number;
+  refreshSeconds: number;
+  playoffsOnly: boolean;
+  showClock: boolean;
+  muted: boolean;
+  showCredit: true;
+}
+
+interface GameScoreProfileRow {
+  public_profile_id: string;
+  config_json: string;
+  updated_at: number;
 }
 
 interface OAuthStatePayload {
@@ -282,7 +296,7 @@ function buildAuthCorsHeaders(request: Request, env: Env): Headers {
 
   headers.set('Access-Control-Allow-Origin', origin);
   headers.set('Access-Control-Allow-Credentials', 'true');
-  headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
   headers.set('Access-Control-Allow-Headers', 'Content-Type');
   headers.set('Access-Control-Max-Age', '86400');
   headers.set('Vary', 'Origin');
@@ -298,8 +312,8 @@ function buildAnalyticsCorsHeaders(): Headers {
 
 function buildGlobeCorsHeaders(): Headers {
   const headers = buildPublicCorsHeaders();
-  headers.set('Access-Control-Allow-Methods', 'DELETE, GET, POST, OPTIONS');
-  headers.set('Access-Control-Allow-Headers', 'Content-Type');
+  headers.set('Access-Control-Allow-Methods', 'DELETE, GET, POST, PUT, OPTIONS');
+  headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
   return headers;
 }
 
@@ -321,6 +335,10 @@ function isTwitchGateEnabled(env: Env): boolean {
 }
 
 function getAnalyticsDb(env: Env): D1Database | null {
+  return env.ANALYTICS_DB ?? null;
+}
+
+function getProfileDb(env: Env): D1Database | null {
   return env.ANALYTICS_DB ?? null;
 }
 
@@ -1097,10 +1115,6 @@ function getMissingTwitchConfig(env: Env): string[] {
     missing.push('TWITCH_REDIRECT_URI');
   }
 
-  if (!env.TWITCH_BROADCASTER_ID) {
-    missing.push('TWITCH_BROADCASTER_ID');
-  }
-
   if (!env.TWITCH_SESSION_SECRET) {
     missing.push('TWITCH_SESSION_SECRET');
   }
@@ -1149,33 +1163,6 @@ async function validateTwitchToken(
   }
 
   return response.json() as Promise<TwitchValidationResponse>;
-}
-
-async function checkTwitchFollow(
-  accessToken: string,
-  clientId: string,
-  userId: string,
-  broadcasterId: string,
-): Promise<boolean> {
-  const url = new URL(TWITCH_FOLLOWED_CHANNELS_URL);
-  url.searchParams.set('user_id', userId);
-  url.searchParams.set('broadcaster_id', broadcasterId);
-
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Client-Id': clientId,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Twitch follower check failed with ${response.status}`);
-  }
-
-  const payload =
-    (await response.json()) as TwitchFollowedChannelsResponse;
-
-  return Array.isArray(payload.data) && payload.data.length > 0;
 }
 
 async function getSessionFromRequest(
@@ -1622,6 +1609,14 @@ async function handleAnalyticsSummary(
 async function ensureGlobeSchema(db: D1Database): Promise<void> {
   await db.batch([
     db.prepare(`
+      CREATE TABLE IF NOT EXISTS globe_profiles (
+        twitch_user_id TEXT PRIMARY KEY NOT NULL,
+        channel TEXT UNIQUE NOT NULL,
+        config_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `),
+    db.prepare(`
       CREATE TABLE IF NOT EXISTS globe_geocode_cache (
         query_key TEXT PRIMARY KEY,
         query TEXT NOT NULL,
@@ -1655,6 +1650,98 @@ async function ensureGlobeSchema(db: D1Database): Promise<void> {
       ON globe_checkins(session_id, updated_at DESC)
     `),
   ]);
+}
+
+interface SavedGlobeConfig {
+  channel: string;
+  sessionId: string;
+  rotationSpeed: number;
+  animateCheckIns: boolean;
+  zoomAnimation: boolean;
+  showLabels: boolean;
+  transparent: boolean;
+  globeColor: string;
+}
+
+function parseSavedGlobeConfig(value: unknown, channel: string): SavedGlobeConfig | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const config = value as Record<string, unknown>;
+  if (
+    typeof config.animateCheckIns !== 'boolean' ||
+    (config.zoomAnimation !== undefined && typeof config.zoomAnimation !== 'boolean') ||
+    typeof config.showLabels !== 'boolean' ||
+    typeof config.transparent !== 'boolean' ||
+    typeof config.globeColor !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(config.globeColor)
+  ) return null;
+  return {
+    channel, sessionId: channel, rotationSpeed: 1 / 15,
+    animateCheckIns: config.animateCheckIns, showLabels: config.showLabels,
+    zoomAnimation: config.zoomAnimation === true,
+    transparent: config.transparent, globeColor: config.globeColor.toLowerCase(),
+  };
+}
+
+async function handleGlobeProfile(request: Request, env: Env): Promise<Response> {
+  const headers = buildGlobeCorsHeaders();
+  headers.set('Cache-Control', 'no-store');
+  const channel = new URL(request.url).pathname.split('/').at(-1)?.toLowerCase() ?? '';
+  if (!/^[a-z0-9_]+$/.test(channel)) {
+    return jsonResponse({ error: 'Invalid Twitch channel.' }, headers, 400);
+  }
+  if (!['GET', 'PUT'].includes(request.method)) {
+    return jsonResponse({ error: 'Method not allowed.' }, headers, 405);
+  }
+  const db = getAnalyticsDb(env);
+  if (!db) return jsonResponse({ error: 'Profile storage is not configured.' }, headers, 503);
+
+  try {
+    if (request.method === 'GET') {
+      await ensureGlobeSchema(db);
+      const row = await db.prepare('SELECT config_json, updated_at FROM globe_profiles WHERE channel = ?')
+        .bind(channel).first<{ config_json: string; updated_at: number }>();
+      if (!row) return jsonResponse({ error: 'Profile not found.' }, headers, 404);
+      const config = parseSavedGlobeConfig(JSON.parse(row.config_json), channel);
+      return config
+        ? jsonResponse({ config, updatedAt: row.updated_at }, headers)
+        : jsonResponse({ error: 'Saved globe settings are invalid.' }, headers, 500);
+    }
+
+    const authorization = request.headers.get('Authorization');
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
+    if (!token) return jsonResponse({ error: 'Twitch sign-in is required.' }, headers, 401);
+    let identity: TwitchValidationResponse;
+    try {
+      identity = await validateTwitchToken(token);
+    } catch {
+      return jsonResponse({ error: 'Twitch sign-in has expired.' }, headers, 401);
+    }
+    const clientId = env.TWITCH_CLIENT_ID?.trim() || '6vii4ube47seid33yqelo7gdh3cxz9';
+    if (
+      identity.client_id !== clientId || !identity.user_id ||
+      typeof identity.login !== 'string' || identity.login.toLowerCase() !== channel ||
+      !Number.isFinite(identity.expires_in) || identity.expires_in <= 0
+    ) return jsonResponse({ error: 'Only the channel owner can save these settings.' }, headers, 403);
+
+    let payload: { config?: unknown };
+    try {
+      payload = await request.json() as { config?: unknown };
+    } catch {
+      return jsonResponse({ error: 'Invalid JSON payload.' }, headers, 400);
+    }
+    const config = parseSavedGlobeConfig(payload?.config, channel);
+    if (!config) return jsonResponse({ error: 'Invalid globe settings.' }, headers, 400);
+    await ensureGlobeSchema(db);
+    const updatedAt = Date.now();
+    await db.prepare(`
+      INSERT INTO globe_profiles (twitch_user_id, channel, config_json, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(twitch_user_id) DO UPDATE SET
+        channel = excluded.channel, config_json = excluded.config_json, updated_at = excluded.updated_at
+    `).bind(identity.user_id, channel, JSON.stringify(config), updatedAt).run();
+    return jsonResponse({ config, updatedAt }, headers);
+  } catch {
+    return jsonResponse({ error: 'Unable to access globe settings.' }, headers, 500);
+  }
 }
 
 function normalizeGlobeInput(value: unknown, maxLength: number): string | null {
@@ -2068,6 +2155,189 @@ async function proxyRequest(request: Request, env: Env): Promise<Response> {
   return proxiedResponse;
 }
 
+function parseGameScoreProfileConfig(value: unknown): GameScoreProfileConfig | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const config = value as Record<string, unknown>;
+  const sport = config.sport;
+  const style = config.style;
+  const layout = config.layout;
+  const goalAnimation = config.goalAnimation;
+  const rawTeams = config.teams;
+  const rawGameId = config.gameId;
+  const gameId = rawGameId === undefined || rawGameId === null ? undefined : Number(rawGameId);
+  const refreshSeconds = Number(config.refreshSeconds);
+
+  if (
+    (sport !== 'nhl' && sport !== 'soccer') ||
+    (style !== 'broadcast' && style !== 'classic' && style !== 'minimal' && style !== 'arena') ||
+    (layout !== 'compact' && layout !== 'stacked') ||
+    (goalAnimation !== 'logo-storm' && goalAnimation !== 'jumbotron' && goalAnimation !== 'logo-rain') ||
+    !Array.isArray(rawTeams) ||
+    rawTeams.length > 32 ||
+    !Number.isFinite(refreshSeconds) ||
+    refreshSeconds < 10 ||
+    refreshSeconds > 60 ||
+    typeof config.playoffsOnly !== 'boolean' ||
+    typeof config.showClock !== 'boolean' ||
+    typeof config.muted !== 'boolean' ||
+    (gameId !== undefined && (!Number.isInteger(gameId) || gameId <= 0))
+  ) {
+    return null;
+  }
+
+  const teams = Array.from(
+    new Set(
+      rawTeams.map((team) => (typeof team === 'string' ? team.trim().toUpperCase() : '')),
+    ),
+  );
+
+  if (teams.some((team) => !team || team.length > 64)) {
+    return null;
+  }
+
+  return {
+    sport,
+    mode: gameId === undefined ? 'auto' : 'manual',
+    style,
+    layout,
+    goalAnimation,
+    teams,
+    ...(gameId === undefined ? {} : { gameId }),
+    refreshSeconds: Math.round(refreshSeconds),
+    playoffsOnly: config.playoffsOnly === true,
+    showClock: config.showClock !== false,
+    muted: config.muted === true,
+    showCredit: true,
+  };
+}
+
+function parseStoredGameScoreProfile(row: GameScoreProfileRow): {
+  profileId: string;
+  config: GameScoreProfileConfig;
+  updatedAt: number;
+} | null {
+  try {
+    const config = parseGameScoreProfileConfig(JSON.parse(row.config_json));
+    return config
+      ? { profileId: row.public_profile_id, config, updatedAt: row.updated_at }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function profileNotConfiguredResponse(headers: Headers): Response {
+  return jsonResponse({ error: 'Profile storage is not configured.' }, headers, 503);
+}
+
+async function handleMyGameScoreProfile(request: Request, env: Env): Promise<Response> {
+  const headers = buildAuthCorsHeaders(request, env);
+  const database = getProfileDb(env);
+
+  if (!database) {
+    return profileNotConfiguredResponse(headers);
+  }
+
+  const session = await getSessionFromRequest(request, env);
+  if (!session) {
+    return jsonResponse({ error: 'Twitch sign-in is required.' }, headers, 401);
+  }
+
+  if (request.method === 'GET') {
+    const row = await database
+      .prepare(
+        'SELECT public_profile_id, config_json, updated_at FROM game_score_profiles WHERE twitch_user_id = ?',
+      )
+      .bind(session.sub)
+      .first<GameScoreProfileRow>();
+
+    if (!row) {
+      return jsonResponse({ error: 'Profile not found.' }, headers, 404);
+    }
+
+    const profile = parseStoredGameScoreProfile(row);
+    return profile
+      ? jsonResponse(profile, headers)
+      : jsonResponse({ error: 'Saved profile is invalid.' }, headers, 500);
+  }
+
+  if (request.method !== 'PUT') {
+    return new Response('Method not allowed', { status: 405, headers });
+  }
+
+  let payload: { config?: unknown };
+  try {
+    payload = (await request.json()) as { config?: unknown };
+  } catch {
+    return jsonResponse({ error: 'Configuration must be valid JSON.' }, headers, 400);
+  }
+
+  const config = parseGameScoreProfileConfig(payload.config);
+  if (!config) {
+    return jsonResponse({ error: 'Configuration contains invalid settings.' }, headers, 400);
+  }
+
+  const existing = await database
+    .prepare('SELECT public_profile_id FROM game_score_profiles WHERE twitch_user_id = ?')
+    .bind(session.sub)
+    .first<{ public_profile_id: string }>();
+  const profileId = existing?.public_profile_id ?? crypto.randomUUID().replace(/-/g, '');
+  const updatedAt = Date.now();
+
+  await database
+    .prepare(
+      `INSERT INTO game_score_profiles
+        (twitch_user_id, public_profile_id, config_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(twitch_user_id) DO UPDATE SET
+         config_json = excluded.config_json,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(session.sub, profileId, JSON.stringify(config), updatedAt, updatedAt)
+    .run();
+
+  return jsonResponse({ profileId, config, updatedAt }, headers);
+}
+
+async function handlePublicGameScoreProfile(request: Request, env: Env): Promise<Response> {
+  const headers = buildPublicCorsHeaders();
+  headers.set('Cache-Control', 'no-store');
+
+  if (request.method !== 'GET') {
+    return new Response('Method not allowed', { status: 405, headers });
+  }
+
+  const database = getProfileDb(env);
+
+  if (!database) {
+    return profileNotConfiguredResponse(headers);
+  }
+
+  const profileId = decodeURIComponent(new URL(request.url).pathname.split('/').at(-1) ?? '');
+  if (!/^[a-f0-9]{32}$/i.test(profileId)) {
+    return jsonResponse({ error: 'Profile not found.' }, headers, 404);
+  }
+
+  const row = await database
+    .prepare(
+      'SELECT public_profile_id, config_json, updated_at FROM game_score_profiles WHERE public_profile_id = ?',
+    )
+    .bind(profileId)
+    .first<GameScoreProfileRow>();
+
+  if (!row) {
+    return jsonResponse({ error: 'Profile not found.' }, headers, 404);
+  }
+
+  const profile = parseStoredGameScoreProfile(row);
+  return profile
+    ? jsonResponse(profile, headers)
+    : jsonResponse({ error: 'Saved profile is invalid.' }, headers, 500);
+}
+
 async function handleTwitchStatus(request: Request, env: Env): Promise<Response> {
   const headers = buildAuthCorsHeaders(request, env);
 
@@ -2359,7 +2629,10 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') {
-      if (url.pathname.startsWith('/auth/twitch/')) {
+      if (
+        url.pathname.startsWith('/auth/twitch/') ||
+        url.pathname === '/api/me/game-score-profile'
+      ) {
         return new Response(null, {
           status: 204,
           headers: buildAuthCorsHeaders(request, env),
@@ -2410,8 +2683,20 @@ export default {
       return handleAnalyticsEvent(request, env);
     }
 
+    if (url.pathname === '/api/me/game-score-profile') {
+      return handleMyGameScoreProfile(request, env);
+    }
+
+    if (url.pathname.startsWith('/api/game-score-profiles/')) {
+      return handlePublicGameScoreProfile(request, env);
+    }
+
     if (url.pathname === '/api/analytics/summary') {
       return handleAnalyticsSummary(request, env);
+    }
+
+    if (url.pathname.startsWith('/api/globe/profiles/')) {
+      return handleGlobeProfile(request, env);
     }
 
     if (url.pathname === '/api/globe/checkins') {

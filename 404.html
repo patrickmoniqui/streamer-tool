@@ -14,7 +14,7 @@
       if (match) {
         const target = new URL(`${match[1]}/overlay.html`, window.location.origin);
         target.search = window.location.search;
-        target.searchParams.set('channel', match[2].toLowerCase());
+        target.hash = new URLSearchParams({ channel: match[2].toLowerCase() }).toString();
         target.searchParams.delete('speed');
         window.location.replace(target.toString());
       } else {

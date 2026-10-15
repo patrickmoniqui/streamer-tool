@@ -129,6 +129,8 @@ git push
 - `/api/soccer/score/:date`
 - `/api/globe/checkins`
 - `/api/globe/sessions/:session/clear`
+- `/api/me/game-score-profile` (authenticated `GET` / `PUT`)
+- `/api/game-score-profiles/:profile` (public `GET`)
 
 The NHL routes proxy public NHL web endpoints. The soccer routes normalize ESPN soccer scoreboard responses into the app's shared game shape. All routes use short cache windows and permissive CORS for the GitHub Pages frontend.
 
@@ -140,9 +142,86 @@ Apply the globe schema with:
 npx wrangler d1 execute sport-live-feed-analytics --remote --file worker/sql/globe.sql
 ```
 
-## Optional Twitch gate
+## Globe Twitch connection
 
-The Twitch follower gate is scaffolded behind feature flags and is off by default.
+The Globe settings page has a **Connect with Twitch** button. Sign-in selects
+the verified Twitch channel and loads its saved settings. Choose the appearance,
+click **Save changes**, then copy the permanent OBS URL:
+
+```text
+https://your-domain/globe/yourusername
+```
+
+The URL stays the same when settings change. The overlay loads its channel's
+saved settings and checks for updates every five seconds. Labels, animations,
+background transparency, and globe color update without replacing the OBS link.
+The **Zoom animation** toggle is off by default. When enabled, new check-ins
+rotate into view, zoom in briefly, then return to the normal view. It also works
+when **Animate new check-ins** is off. `!checkin me` does not trigger zoom.
+The zoom toggle is saved with the other settings and uses the same permanent URL.
+The link becomes available after settings have been saved. Changes in the preview
+remain drafts until **Save changes** succeeds. Legacy query-string overlay links
+continue to work, with explicit query settings retained as overrides.
+
+Globe sign-in runs entirely in the browser using Twitch's implicit OAuth flow.
+The public Client ID supplied for this app is included by default; no client
+secret or Worker OAuth callback configuration is required for globe sign-in.
+The app validates the returned token with Twitch and keeps it only in memory for
+saving settings during that visit. It revalidates the connection hourly. The token
+is never put in local/session storage or an OBS URL and is removed from the
+address bar immediately. After reloading settings, connect again to save changes.
+Only the channel and draft globe settings are saved locally; published settings
+are stored in the Worker's D1 database.
+
+The Worker exposes public `GET /api/globe/profiles/:channel` and authenticated
+`PUT /api/globe/profiles/:channel`. Every save validates the Bearer token directly
+with Twitch and checks that the account owns the channel. Settings are keyed by
+Twitch user ID, and the public username selects the overlay profile. The Worker
+uses the supplied public Client ID by default; if you override the frontend's
+`VITE_TWITCH_CLIENT_ID`, set the same `TWITCH_CLIENT_ID` on the Worker. No client
+secret is required for this API. Configure `VITE_API_BASE_URL` and the Worker's
+`ANALYTICS_DB` binding as for globe markers.
+
+The `globe_profiles` table is included in `worker/sql/globe.sql` and is also created
+on demand. To initialize it explicitly:
+
+```bash
+npx wrangler d1 execute nhl-live-feed-analytics --remote --file worker/sql/globe.sql
+```
+
+In the Twitch developer console, register the exact globe settings URL under
+**OAuth Redirect URLs**, for example:
+
+```text
+https://stream.keylight.ca/globe/
+http://localhost:5173/globe/
+```
+
+Use the actual deployed URL, including any repository prefix and trailing slash.
+By default the app uses the current settings page's URL without its query or
+fragment. An extensionless `/globe` path is normalized to `/globe/`. If you use
+`/globe/index.html`, register that exact URL too or configure a canonical redirect.
+
+Optional frontend overrides:
+
+```bash
+VITE_TWITCH_CLIENT_ID=6vii4ube47seid33yqelo7gdh3cxz9
+VITE_TWITCH_REDIRECT_URI=https://stream.keylight.ca/globe/
+```
+
+A configured redirect must be a globe settings page on the same app origin with
+no query or fragment. GitHub Pages builds read these overrides from repository
+variables. Changing them requires rebuilding the frontend. Existing Worker-backed
+Game Score sign-in and saved profiles remain separate.
+
+Run the mocked OAuth, rendered link controls, and chat connection regression
+checks with `node scripts/test-twitch-connect.mjs`. Run the local Worker/D1 profile
+checks with `node scripts/test-globe-profiles.mjs`; all Twitch responses are mocked.
+
+## Optional Twitch saved profiles
+
+Twitch sign-in can save one Game Score configuration per Twitch account. It is
+disabled by default and does not replace existing query-string overlay URLs.
 
 Frontend env:
 
@@ -156,7 +235,6 @@ Worker vars:
 ```toml
 TWITCH_GATE_ENABLED = "false"
 TWITCH_ALLOWED_ORIGIN = "https://<your-user>.github.io"
-TWITCH_BROADCASTER_ID = "<your-twitch-broadcaster-id>"
 TWITCH_CLIENT_ID = "<twitch-client-id>"
 TWITCH_CLIENT_SECRET = "<twitch-client-secret>"
 TWITCH_REDIRECT_URI = "https://your-worker-subdomain.workers.dev/auth/twitch/callback"
@@ -164,7 +242,27 @@ TWITCH_SESSION_SECRET = "<long-random-secret>"
 TWITCH_SUCCESS_REDIRECT_URL = "https://<your-user>.github.io/<repo>/"
 ```
 
-When both flags are turned on, the settings page can unlock supporter-only options in the future. The current overlay always shows creator credit.
+Set `VITE_ENABLE_TWITCH_GATE=true` in the frontend build and
+`TWITCH_GATE_ENABLED = "true"` in the Worker. Register the exact Worker callback
+URL with Twitch, configure the client secret with `wrangler secret put`, and use a
+long random `TWITCH_SESSION_SECRET`.
+
+Apply the profile schema to the same D1 database bound as `ANALYTICS_DB`:
+
+```bash
+npx wrangler d1 execute sport-live-feed-analytics --remote --file worker/sql/game_score_profiles.sql
+```
+
+After signing in and saving settings, the Game Score page shows a permanent OBS
+link such as `.../game-score/overlay.html?profile=<opaque-id>`. That link loads
+the saved baseline whenever OBS reloads. Existing full query-string links remain
+portable and unchanged. A mixed link is supported: explicit valid settings in the
+URL override only those saved profile values, for example
+`?profile=<opaque-id>&style=minimal`.
+
+For reliable credentialed sign-in, serve the settings app from
+`https://stream.keylight.ca` and the Worker from that domain or a same-site API
+subdomain such as `https://api.stream.keylight.ca`.
 
 ## Basic analytics
 
