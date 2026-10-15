@@ -159,6 +159,10 @@ The **Zoom animation** toggle is off by default. When enabled, new check-ins
 rotate into view, zoom in briefly, then return to the normal view. It also works
 when **Animate new check-ins** is off. `!checkin me` does not trigger zoom.
 The zoom toggle is saved with the other settings and uses the same permanent URL.
+Countries with check-ins use the configured globe color at 30% opacity inside
+their highlighted borders, including the current animated
+check-in before its marker is placed. Highlights follow the marker list and clear
+when the corresponding check-ins are removed.
 The link becomes available after settings have been saved. Changes in the preview
 remain drafts until **Save changes** succeeds. Legacy query-string overlay links
 continue to work, with explicit query settings retained as overrides.

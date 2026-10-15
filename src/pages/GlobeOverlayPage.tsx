@@ -21,6 +21,7 @@ import { FOCUS_ROTATION_MS, FOCUS_HOLD_MS, FOCUS_RESUME_MS, getGlobeFocusCameraD
 
 const GLOBE_RADIUS = 1;
 const GLOBE_FILL_RADIUS = GLOBE_RADIUS * 0.999;
+const GLOBE_SURFACE_SCALE = 1.003;
 const GLOBE_OCCLUSION_RADIUS = GLOBE_FILL_RADIUS * 0.9995;
 const MAX_FILL_TRIANGLE_EDGE_DEGREES = 3;
 const MAX_FILL_SUBDIVISION_DEPTH = 6;
@@ -225,6 +226,27 @@ function findCountryKeyForLocation(
   return null;
 }
 
+function getHighlightedCountryKeys(checkIns: GlobeCheckIn[]): Set<string> {
+  const keys = new Set<string>();
+
+  for (const checkIn of checkIns) {
+    let key = findCountryKeyForLocation(checkIn.latitude, checkIn.longitude);
+
+    // Small islands and coastal coordinates may fall outside the simplified map.
+    if (!key && checkIn.country) {
+      const name = checkIn.country.trim().toLowerCase();
+      const country = COUNTRY_BORDERS.features?.find(
+        (candidate) => candidate.properties?.name?.toLowerCase() === name,
+      );
+      if (country) key = getFeatureKey(country);
+    }
+
+    if (key) keys.add(key);
+  }
+
+  return keys;
+}
+
 function createBorderLineFromRing(
   ring: GeoJsonPosition[],
   material: THREE.ShaderMaterial,
@@ -239,7 +261,7 @@ function createBorderLineFromRing(
       continue;
     }
 
-    points.push(latLonToVector(latitude, longitude, GLOBE_RADIUS * 1.012));
+    points.push(latLonToVector(latitude, longitude, GLOBE_FILL_RADIUS * GLOBE_SURFACE_SCALE));
   }
 
   if (points.length < 2) {
@@ -247,7 +269,9 @@ function createBorderLineFromRing(
   }
 
   const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  return new THREE.Line(geometry, material);
+  const line = new THREE.Line(geometry, material);
+  line.renderOrder = 1;
+  return line;
 }
 
 function formatRgba(color: THREE.Color, alpha: number): string {
@@ -355,12 +379,14 @@ function createActiveCountryBorderMaterial(
 
 function createLandmassFillMaterial(
   fillColor: THREE.ColorRepresentation,
+  opacity = 0.20,
 ): THREE.ShaderMaterial {
   const color = new THREE.Color(fillColor);
 
   return new THREE.ShaderMaterial({
     uniforms: {
       fillColor: { value: color },
+      opacity: { value: opacity },
     },
     transparent: true,
     depthTest: true,
@@ -379,6 +405,7 @@ function createLandmassFillMaterial(
     `,
     fragmentShader: `
       uniform vec3 fillColor;
+      uniform float opacity;
       varying float vFacing;
 
       void main() {
@@ -386,10 +413,8 @@ function createLandmassFillMaterial(
           discard;
         }
 
-        float visibility = smoothstep(0.06, 0.34, vFacing);
-        float alpha = visibility * 0.20;
-        vec3 shadedColor = mix(fillColor * 0.34, fillColor * 0.78, visibility);
-        gl_FragColor = vec4(shadedColor, alpha);
+        gl_FragColor = vec4(fillColor, opacity);
+        #include <colorspace_fragment>
       }
     `,
   });
@@ -667,6 +692,38 @@ function addLandmassBorders(
   }
 }
 
+function addActiveCountryFills(
+  fillGroup: THREE.Group,
+  highlightedCountryKeys: Set<string>,
+  fillColor: THREE.ColorRepresentation,
+): void {
+  if (!highlightedCountryKeys.size) return;
+
+  const material = createLandmassFillMaterial(fillColor, 0.3);
+  material.side = THREE.DoubleSide;
+  let addedFill = false;
+
+  for (const country of COUNTRY_BORDERS.features ?? []) {
+    if (!highlightedCountryKeys.has(getFeatureKey(country))) continue;
+    const geometry = country.geometry;
+    if (!geometry?.coordinates) continue;
+    const polygons = geometry.type === 'Polygon'
+      ? [geometry.coordinates as GeoJsonPolygon]
+      : geometry.type === 'MultiPolygon' ? geometry.coordinates as GeoJsonMultiPolygon : [];
+
+    for (const polygon of polygons) {
+      const mesh = createLandmassFillMeshFromPolygon(polygon, material);
+      if (!mesh) continue;
+      // Lift the fill above the depth globe while leaving markers and borders visible.
+      mesh.scale.setScalar(GLOBE_SURFACE_SCALE);
+      fillGroup.add(mesh);
+      addedFill = true;
+    }
+  }
+
+  if (!addedFill) material.dispose();
+}
+
 function addActiveCountryBorders(
   activeCountryBorderGroup: THREE.Group,
   highlightedCountryKeys: Set<string>,
@@ -706,12 +763,12 @@ function addActiveCountryBorders(
       const innerLine = createBorderLineFromRing(outerRing, innerMaterial);
 
       if (outerLine) {
-        outerLine.scale.setScalar(1.006);
+        outerLine.renderOrder = 2;
         activeCountryBorderGroup.add(outerLine);
       }
 
       if (innerLine) {
-        innerLine.scale.setScalar(1.012);
+        innerLine.renderOrder = 2;
         activeCountryBorderGroup.add(innerLine);
       }
     }
@@ -1083,7 +1140,12 @@ export function GlobeScene({
     fillGroup.clear();
     disposeGroup(activeCountryBorderGroup);
     activeCountryBorderGroup.clear();
-  }, [checkIns, config.globeColor]);
+    const highlightedCountries = getHighlightedCountryKeys(
+      focusCheckIn ? [...checkIns, focusCheckIn.checkIn] : checkIns,
+    );
+    addActiveCountryFills(fillGroup, highlightedCountries, config.globeColor);
+    addActiveCountryBorders(activeCountryBorderGroup, highlightedCountries, themeColors);
+  }, [checkIns, config.globeColor, focusCheckIn]);
 
   useEffect(() => {
     const globeGroup = globeGroupRef.current;
