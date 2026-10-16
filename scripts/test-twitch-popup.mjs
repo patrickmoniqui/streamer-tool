@@ -56,8 +56,8 @@ try {
   receive({ origin, source: popup, data });
   assert.deepEqual(await promise, { login: 'streamer', userId: '123' });
   assert.equal(validations, 1);
-  assert.ok(!JSON.stringify([...stored]).includes('popup-token'));
-  assert.equal(stored.size, 0); assert.equal(listeners.size, 0);
+  assert.equal(JSON.parse(stored.get('keylight-twitch-session')).token, 'popup-token');
+  assert.equal(stored.has('keylight-globe-twitch-oauth'), false); assert.equal(listeners.size, 0);
   assert.equal(channels[0].closed, true);
 
   reset('/repo/dancefloor/');

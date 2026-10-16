@@ -14,7 +14,7 @@ function popupRedirect(): string {
 }
 export function connectBrowserTwitch(): Promise<TwitchIdentity> {
   // Reuse the already registered Globe callback. Only the random OAuth state is
-  // stored; the access token travels through an origin-checked message in memory.
+  // used for callback verification; the token is relayed through an origin-checked message.
   const authorize = new URL(buildTwitchConnectUrl({ redirectUri: popupRedirect(), popup: true, scopes: EVENT_SCOPES }));
   const state = authorize.searchParams.get('state')!;
   const origin = new URL(window.location.href).origin;

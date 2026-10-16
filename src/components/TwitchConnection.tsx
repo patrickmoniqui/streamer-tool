@@ -16,6 +16,6 @@ export function TwitchConnection() {
       {identity && <button className="shared-twitch-disconnect" disabled={busy} onClick={() => { clearBrowserTwitch(); setMessage('Signed out.'); }}>Disconnect</button>}
     </div>
     {message && <p className="shared-twitch-message" role="status">{message}</p>}
-    {identity && <p className="shared-twitch-message">Signed in for this browser visit. Twitch credentials stay in memory.</p>}
+    {identity && <p className="shared-twitch-message">Connected across tools in this browser tab.</p>}
   </div>;
 }

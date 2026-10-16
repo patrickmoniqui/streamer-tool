@@ -162,14 +162,15 @@ continue to work, with explicit query settings retained as overrides.
 Globe's direct sign-in runs entirely in the browser using Twitch's implicit OAuth flow.
 The public Client ID supplied for this app is included by default; no client
 secret or Worker OAuth callback configuration is required for globe sign-in.
-The app validates the returned token with Twitch and keeps it only in memory for
-saving settings during that visit. It revalidates the connection hourly. The token
-is never put in local/session storage or an OBS URL and is removed from the
-address bar immediately. After reloading settings, connect again to save changes.
-Only the channel and draft globe settings are saved locally; published settings
-are stored in the Worker's D1 database.
-
-The launcher, Globe, and Dancefloor share a direct Twitch account control. Sign-in uses the browser's in-memory credential for the current visit; no token is placed in storage or OBS links. Reconnect after a page reload or navigation when prompted.
+The app validates the returned token with Twitch and saves the expiring credential
+in session storage for this browser tab. The launcher, Globe, and Dancefloor reuse
+that session across navigation and reloads, validating it with Twitch before
+restoring the connection and hourly while settings remain open. Disconnect removes
+the shared session; expired or revoked tokens require sign-in again. Closing the
+tab ends the session. Tokens are removed from the callback address immediately
+and never enter OBS links or public profiles. Browser storage must be available
+to retain sign-in across pages. Draft globe settings are saved locally; published
+settings are stored in the Worker's D1 database.
 
 The Worker exposes public `GET /api/globe/profiles/:channel` and authenticated
 `PUT /api/globe/profiles/:channel`. Every save validates the Bearer token directly with Twitch and checks that the account owns the channel. Settings are keyed by
@@ -378,9 +379,9 @@ Globe's registered settings callback, so register the exact Globe settings URL i
 the Twitch developer console (including `http://localhost:5173/globe/` for local
 work). Optional `VITE_TWITCH_CLIENT_ID` / `VITE_TWITCH_REDIRECT_URI` overrides follow
 Globe's existing rules. If overriding the frontend Client ID, set the Worker's
-`TWITCH_CLIENT_ID` to match. Tokens stay in memory, are removed from the callback
-URL immediately, and never enter browser storage, D1, or the OBS URL. Reloading or
-navigating away requires signing in again. Use one settings page per channel.
+`TWITCH_CLIENT_ID` to match. The shared browser-tab session survives reloads and
+tool navigation. Tokens are removed from the callback URL immediately and never
+enter D1 or the OBS URL. Use one settings page per channel.
 
 Closing the settings page stops new events even if OBS stays open. Events missed
 while the socket is disconnected are not replayed by Twitch. Existing dancers and

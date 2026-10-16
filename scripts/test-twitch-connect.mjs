@@ -100,7 +100,7 @@ try {
     assert.deepEqual(identity, { login: 'djmoneykey', userId: '12345' });
     assert.equal(auth.getTwitchConnectToken(), 'mock-token');
     assert.equal(session.has(stateKey), false);
-    assert.equal(JSON.stringify([...session]).includes('mock-token'), false);
+    assert.equal(JSON.parse(session.get(auth.TWITCH_SESSION_KEY)).token, 'mock-token');
     const overlay = new URL(globe.buildGlobeOverlayUrl({ ...globe.DEFAULT_GLOBE_CONFIG, channel: identity.login }));
     assert.equal(overlay.pathname, `${path.startsWith('/repo') ? '/repo' : ''}/globe/djmoneykey`);
     assert.equal(overlay.search, '');
@@ -156,6 +156,62 @@ try {
       assert.equal(requests.length, before, 'Invalid OAuth state/response must not use the token');
     }
   }
+
+  // A new module instance models the full-page navigation between tools.
+  resetBrowser(`${origin}/`);
+  validation = { client_id: clientId, login: 'DJMoneyKey', user_id: '12345', expires_in: 3600 };
+  validationStatus = 200;
+  const homeSession = await loadModule('src/lib/twitchConnect.ts');
+  await homeSession.acceptBrowserTwitchToken('mock-token');
+  setLocation(`${origin}/dancefloor/`);
+  const danceSession = await loadModule('src/lib/twitchConnect.ts');
+  assert.equal(danceSession.getBrowserTwitchIdentity(), null, 'Stored identity is not trusted before Twitch validation');
+  await danceSession.restoreBrowserTwitch();
+  assert.deepEqual(danceSession.getBrowserTwitchIdentity(), { login: 'djmoneykey', userId: '12345' });
+  assert.equal(danceSession.getTwitchConnectToken(), 'mock-token');
+  const reloadSession = await loadModule('src/lib/twitchConnect.ts');
+  await reloadSession.restoreBrowserTwitch();
+  assert.equal(reloadSession.getTwitchConnectToken(), 'mock-token', 'Reload retains the shared session');
+  reloadSession.clearBrowserTwitch();
+  const disconnected = await loadModule('src/lib/twitchConnect.ts');
+  await disconnected.restoreBrowserTwitch();
+  assert.equal(disconnected.getBrowserTwitchIdentity(), null, 'Disconnect clears the session for later tool navigation');
+  assert.equal(session.has(homeSession.TWITCH_SESSION_KEY), false);
+
+  for (const failure of ['expired', 'wrong-client', 'malformed', 'revoked', 'network']) {
+    resetBrowser();
+    session.set(homeSession.TWITCH_SESSION_KEY, JSON.stringify({ clientId, token: 'mock-token', expiresAt: Date.now() + 3600000 }));
+    if (failure === 'expired') session.set(homeSession.TWITCH_SESSION_KEY, JSON.stringify({ clientId, token: 'mock-token', expiresAt: 1 }));
+    if (failure === 'wrong-client') session.set(homeSession.TWITCH_SESSION_KEY, JSON.stringify({ clientId: 'other', token: 'mock-token', expiresAt: Date.now() + 3600000 }));
+    if (failure === 'malformed') session.set(homeSession.TWITCH_SESSION_KEY, '{broken');
+    validationStatus = failure === 'revoked' ? 401 : failure === 'network' ? 503 : 200;
+    const auth = await loadModule('src/lib/twitchConnect.ts');
+    await auth.restoreBrowserTwitch();
+    assert.equal(auth.getBrowserTwitchIdentity(), null);
+    if (failure === 'network') assert.ok(session.has(homeSession.TWITCH_SESSION_KEY), 'Temporary outage retains the session for retry');
+    else assert.equal(session.has(homeSession.TWITCH_SESSION_KEY), false);
+  }
+  validationStatus = 200;
+  resetBrowser();
+  session.set(homeSession.TWITCH_SESSION_KEY, JSON.stringify({ clientId, token: 'mock-token', expiresAt: Date.now() + 3600000 }));
+  const automatic = await loadModule('src/lib/twitchConnect.ts');
+  let updates = 0;
+  const unsubscribe = automatic.subscribeBrowserTwitch(() => { updates++; });
+  await automatic.restoreBrowserTwitch();
+  assert.equal(automatic.getBrowserTwitchIdentity().login, 'djmoneykey');
+  assert.equal(updates, 1, 'Tool subscribers receive the restored account automatically');
+  unsubscribe();
+  const beforeDelayedValidation = globalThis.fetch;
+  let finishValidation;
+  globalThis.fetch = () => new Promise(resolve => { finishValidation = resolve; });
+  const delayed = await loadModule('src/lib/twitchConnect.ts');
+  const restoring = delayed.restoreBrowserTwitch();
+  delayed.clearBrowserTwitch();
+  finishValidation(Response.json(validation));
+  await restoring;
+  assert.equal(delayed.getBrowserTwitchIdentity(), null, 'A late restore cannot undo Disconnect');
+  assert.equal(session.has(homeSession.TWITCH_SESSION_KEY), false);
+  globalThis.fetch = beforeDelayedValidation;
 
   resetBrowser();
   const configured = await loadModule('src/lib/twitchConnect.ts', {

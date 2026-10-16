@@ -1,4 +1,5 @@
 export const TWITCH_CONNECT_STATE_KEY = 'keylight-globe-twitch-oauth';
+export const TWITCH_SESSION_KEY = 'keylight-twitch-session';
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 // Twitch Client IDs are public. Deployments can override this application ID.
 const CLIENT_ID = import.meta.env.VITE_TWITCH_CLIENT_ID?.trim() || '6vii4ube47seid33yqelo7gdh3cxz9';
@@ -71,51 +72,98 @@ let callbackResult: Promise<TwitchIdentity | null> | undefined;
 let connectionToken: { value: string; expiresAt: number } | null = null;
 let connectionIdentity: TwitchIdentity | null = null;
 const identityListeners = new Set<() => void>();
+let restoration: Promise<void> | undefined;
+let sessionVersion = 0;
+let validationTimer: ReturnType<typeof setInterval> | undefined;
+function persistSession(): void {
+  try {
+    if (connectionToken && connectionIdentity) {
+      window.sessionStorage.setItem(TWITCH_SESSION_KEY, JSON.stringify({ clientId: CLIENT_ID, token: connectionToken.value, expiresAt: connectionToken.expiresAt }));
+    } else window.sessionStorage.removeItem(TWITCH_SESSION_KEY);
+  } catch { /* Browsers blocking storage can still sign in for this page. */ }
+}
+export function restoreBrowserTwitch(): Promise<void> {
+  if (restoration) return restoration;
+  if (getTwitchConnectToken()) return Promise.resolve();
+  const version = sessionVersion;
+  restoration = (async () => {
+    let saved: { clientId?: string; token?: string; expiresAt?: number } | null = null;
+    try { saved = JSON.parse(window.sessionStorage.getItem(TWITCH_SESSION_KEY) ?? 'null'); } catch { persistSession(); }
+    if (!saved) return;
+    if (saved.clientId !== CLIENT_ID || typeof saved.token !== 'string' || !saved.token || !Number.isFinite(saved.expiresAt) || saved.expiresAt! <= Date.now()) {
+      persistSession(); return;
+    }
+    try {
+      const identity = await validateToken(saved.token);
+      if (version === sessionVersion) rememberIdentity(saved.token, identity);
+    } catch (error) {
+      // Keep the saved session on network failures so a reload can retry.
+      if (version === sessionVersion && (error as { invalidToken?: boolean }).invalidToken) clearBrowserTwitch();
+    }
+  })();
+  return restoration;
+}
 export function getBrowserTwitchIdentity(): TwitchIdentity | null { return getTwitchConnectToken() ? connectionIdentity : null; }
 export function subscribeBrowserTwitch(listener: () => void): () => void {
   identityListeners.add(listener);
-  return () => { identityListeners.delete(listener); };
+  void restoreBrowserTwitch();
+  if (!validationTimer) validationTimer = setInterval(() => {
+    if (connectionToken && connectionToken.expiresAt <= Date.now()) clearBrowserTwitch();
+    else if (connectionToken) void refreshTwitchConnectToken();
+  }, 3600000);
+  return () => {
+    identityListeners.delete(listener);
+    if (!identityListeners.size) { clearInterval(validationTimer); validationTimer = undefined; }
+  };
 }
 export function clearBrowserTwitch(): void {
-  connectionToken = null; connectionIdentity = null; callbackResult = undefined;
+  sessionVersion++;
+  connectionToken = null; connectionIdentity = null; callbackResult = undefined; restoration = undefined;
+  persistSession();
   identityListeners.forEach(listener => listener());
 }
 function rememberIdentity(token: string, identity: { login: string; user_id: string; expires_in: number }): TwitchIdentity {
+  sessionVersion++;
   connectionToken = { value: token, expiresAt: Date.now() + identity.expires_in * 1000 };
   connectionIdentity = { login: identity.login.toLowerCase(), userId: identity.user_id };
+  persistSession();
   identityListeners.forEach(listener => listener());
   return connectionIdentity;
 }
-export async function acceptBrowserTwitchToken(token: string): Promise<TwitchIdentity> {
-  const response = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${token}` }, credentials: 'omit' });
+async function validateToken(token: string) {
+  const response = await fetch('https://id.twitch.tv/oauth2/validate', { signal: AbortSignal.timeout(10000), headers: { Authorization: `OAuth ${token}` }, credentials: 'omit' });
   const identity = await response.json() as { client_id: string; login: string; user_id: string; expires_in: number };
-  if (!response.ok || identity.client_id !== CLIENT_ID || typeof identity.user_id !== 'string' || !identity.user_id || typeof identity.login !== 'string' || !/^[a-z0-9_]+$/i.test(identity.login) || !Number.isFinite(identity.expires_in) || identity.expires_in <= 0) throw new Error('Unable to verify your Twitch account. Please connect again.');
+  if (!response.ok || identity.client_id !== CLIENT_ID || typeof identity.user_id !== 'string' || !identity.user_id || typeof identity.login !== 'string' || !/^[a-z0-9_]+$/i.test(identity.login) || !Number.isFinite(identity.expires_in) || identity.expires_in <= 0) throw Object.assign(new Error('Unable to verify your Twitch account. Please connect again.'), { invalidToken: response.status === 401 || response.ok });
+  return identity;
+}
+export async function acceptBrowserTwitchToken(token: string): Promise<TwitchIdentity> {
+  const identity = await validateToken(token);
   return rememberIdentity(token, identity);
 }
 
 export function getTwitchConnectToken(): string | null {
   if (connectionToken && connectionToken.expiresAt > Date.now()) return connectionToken.value;
-  connectionToken = null;
+  if (connectionToken) {
+    connectionToken = null; connectionIdentity = null; persistSession();
+  }
   return null;
 }
 
 export async function refreshTwitchConnectToken(): Promise<boolean> {
   const token = getTwitchConnectToken();
   if (!token) return false;
+  const version = sessionVersion;
   try {
-    const response = await fetch('https://id.twitch.tv/oauth2/validate', {
-      headers: { Authorization: `OAuth ${token}` }, credentials: 'omit',
-    });
-    const identity = response.ok ? await response.json() as { client_id: string; expires_in: number } : null;
-    if (!identity || identity.client_id !== CLIENT_ID || !Number.isFinite(identity.expires_in) || identity.expires_in <= 0) {
-      connectionToken = null;
-      return false;
-    }
+    const identity = await validateToken(token);
+    if (version !== sessionVersion || connectionToken?.value !== token) return false;
+    // Keep the identity object stable so revalidation doesn't restart sockets.
     connectionToken = { value: token, expiresAt: Date.now() + identity.expires_in * 1000 };
+    persistSession();
     return true;
-  } catch {
-    connectionToken = null;
-    return false;
+  } catch (error) {
+    if (version !== sessionVersion) return false;
+    if ((error as { invalidToken?: boolean }).invalidToken) { clearBrowserTwitch(); return false; }
+    return Boolean(getTwitchConnectToken());
   }
 }
 
@@ -193,7 +241,7 @@ export function completeTwitchConnect(): Promise<TwitchIdentity | null> {
     ) {
       throw new Error('Twitch returned an invalid account. Please connect again.');
     }
-    // Keep the save credential only in memory; never put it in storage or an OBS URL.
+    // Share this validated session across tool navigation in this browser tab.
     return rememberIdentity(token, identity as { login: string; user_id: string; expires_in: number });
   })();
   return callbackResult;

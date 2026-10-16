@@ -17,8 +17,8 @@ import {
 import { GlobeScene } from './GlobeOverlayPage';
 import { TwitchConnection } from '../components/TwitchConnection';
 import { TwitchIcon } from '../components/TwitchIcon';
+import { connectBrowserTwitch } from '../lib/twitchBrowserConnect';
 import {
-  buildTwitchConnectUrl,
   completeTwitchConnect,
   getTwitchConnectToken,
   refreshTwitchConnectToken,
@@ -262,13 +262,16 @@ export function GlobeSettingsPage() {
     }
   }
 
-  function connectTwitch() {
+  async function connectTwitch() {
+    setCheckingTwitch(true);
     try {
       setTwitchError(null);
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-      window.location.assign(buildTwitchConnectUrl());
+      await connectBrowserTwitch();
     } catch (error) {
       setTwitchError(error instanceof Error ? error.message : 'Unable to start Twitch sign-in. Please try again.');
+    } finally {
+      setCheckingTwitch(false);
     }
   }
 
