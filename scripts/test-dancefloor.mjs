@@ -6,11 +6,18 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 const require = createRequire(import.meta.url);
-const { Miniflare, Response: WorkerResponse } = require('miniflare');
+const { Miniflare, Response: WorkerResponse, WebSocketPair } = require('miniflare');
 const load = async path => {
   const result = await build({ entryPoints: [path], bundle: true, write: false, format: 'esm', platform: 'node' });
   return import(`data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString('base64')}`);
 };
+const { sealCredential, openCredential } = await load('worker/src/dancefloor/credentials.ts');
+const encrypted = await sealCredential('private-test-token', 'owner', 'test-only-background-encryption-secret-12345');
+assert.ok(!JSON.stringify(encrypted).includes('private-test-token'));
+assert.equal(await openCredential(encrypted, 'owner', 'test-only-background-encryption-secret-12345'), 'private-test-token');
+await assert.rejects(openCredential(encrypted, 'other-owner', 'test-only-background-encryption-secret-12345'));
+await assert.rejects(openCredential(encrypted, 'owner', 'a-different-encryption-secret-at-least-32-chars'));
+await assert.rejects(sealCredential('private-test-token', 'owner'));
 const { initialFloor, applyDanceEvent, advanceFloor, qualifyingTrigger } = await load('worker/src/dancefloor/state.ts');
 const { DEFAULT_DANCEFLOOR_CONFIG: defaults, validateDancefloorConfig } = await load('src/lib/dancefloor.ts');
 const config = structuredClone(defaults);
@@ -102,14 +109,27 @@ if (process.argv.includes('--unit')) process.exit(0);
 const bundle = await build({ entryPoints: ['worker/src/index.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
 const persistDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dancefloor-ws-test-'));
 let colorRequests = new Map();
+const serverSockets = [];
+const subscriptions = [];
 let identity = { client_id: 'test-client', user_id: '123', login: 'streamer', expires_in: 3600 };
 const options = {
   d1Persist: path.join(persistDir, 'd1'), durableObjectsPersist: path.join(persistDir, 'rooms'),
-  modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-04-19', bindings: { TWITCH_CLIENT_ID: 'test-client' },
+  modules: true, script: bundle.outputFiles[0].text, compatibilityDate: '2026-04-19', bindings: { TWITCH_CLIENT_ID: 'test-client', DANCEFLOOR_ENCRYPTION_KEY: 'test-only-background-encryption-secret-12345' },
   d1Databases: { ANALYTICS_DB: 'dancefloor-test' },
   durableObjects: { DANCEFLOOR_ROOMS: { className: 'DancefloorRoom', useSQLite: true } },
   outboundService: async request => {
     const url = new URL(request.url);
+    if (url.hostname === 'eventsub.wss.twitch.tv') {
+      const pair = new WebSocketPair();
+      pair[1].accept(); serverSockets.push(pair[1]);
+      const id = `backend-session-${serverSockets.length}`;
+      setTimeout(() => { try { pair[1].send(JSON.stringify({ metadata: { message_type: 'session_welcome' }, payload: { session: { id, keepalive_timeout_seconds: 60 } } })); } catch {} }, 20);
+      return new WorkerResponse(null, { status: 101, webSocket: pair[0] });
+    }
+    if (url.pathname === '/helix/eventsub/subscriptions') {
+      const subscription = await request.json(); subscriptions.push(subscription);
+      return WorkerResponse.json({ data: [{ ...subscription, status: 'enabled' }] }, { status: 202 });
+    }
     if (url.pathname === '/oauth2/validate') return WorkerResponse.json(identity);
     if (url.pathname === '/helix/channel_points/custom_rewards') return WorkerResponse.json({ data: [{ id: 'reward-1', title: 'Dance!', is_enabled: true }] });
     if (url.pathname === '/helix/chat/color') {
@@ -268,6 +288,55 @@ try {
   assert.ok((await (await publicSnapshot()).json()).dancers.some(d => d.id === '123'));
   await owner('/me/clear', 'POST', {});
   assert.equal((await (await publicSnapshot()).json()).dancers.length, 0);
+  // From here on, no settings page or browser relay exists: only the backend
+  // socket and public OBS polling remain active.
+  const waitFor = async check => {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) { if (await check()) return; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error('Background event receiver did not reach the expected state');
+  };
+  const connected = await owner('/me/connect', 'POST', {});
+  assert.equal(connected.status, 200, await connected.text());
+  await waitFor(async () => (await (await publicSnapshot()).json()).connection?.state === 'listening');
+  assert.equal(subscriptions.length, 5);
+  const backgroundEvent = notification('channel.channel_points_custom_reward_redemption.add', { user_id: 'background-viewer', user_name: 'BackgroundViewer', reward: { id: 'reward-1' } }, { id: 'backend/opaque+id==' });
+  assert.equal((await owner('/me/events', 'POST', backgroundEvent)).status, 409, 'Old browser tabs cannot double-relay events while the backend owns the connection');
+  serverSockets.at(-1).send(JSON.stringify(backgroundEvent));
+  await waitFor(async () => (await (await publicSnapshot()).json()).dancers.some(d => d.id === 'background-viewer'));
+  const backgroundFloor = await (await publicSnapshot()).json();
+  assert.ok(!JSON.stringify(backgroundFloor).includes('browser-token'));
+  assert.match(backgroundFloor.connection.message, /background/);
+  assert.match(backgroundFloor.connection.lastEvent, /BackgroundViewer/);
+  // A repeated settings visit must reuse the existing listener.
+  await owner('/me/connect', 'POST', {});
+  assert.equal(serverSockets.length, 1);
+  // Deployment/object restart restores encrypted credentials without an owner request.
+  await mf.dispose(); mf = new Miniflare(options);
+  await publicSnapshot();
+  await waitFor(async () => (await (await publicSnapshot()).json()).connection?.state === 'listening');
+  assert.equal(serverSockets.length, 2);
+  assert.equal(subscriptions.length, 10);
+  const resumedEvent = notification('channel.cheer', { user_id: 'after-restart', user_name: 'AfterRestart', bits: 100 });
+  serverSockets.at(-1).send(JSON.stringify(resumedEvent));
+  await waitFor(async () => (await (await publicSnapshot()).json()).dancers.some(d => d.id === 'after-restart'));
+  serverSockets.at(-1).send(JSON.stringify({ metadata: { message_type: 'revocation' }, payload: { subscription: { status: 'authorization_revoked' } } }));
+  await waitFor(async () => (await (await publicSnapshot()).json()).connection?.state === 'auth-required');
+  const socketCount = serverSockets.length;
+  await publicSnapshot();
+  assert.equal(serverSockets.length, socketCount, 'Public polling cannot restart revoked authorization');
+  await owner('/me/connect', 'POST', {});
+  await waitFor(async () => (await (await publicSnapshot()).json()).connection?.state === 'listening');
+  await owner('/me/disconnect', 'POST', {});
+  assert.equal((await (await publicSnapshot()).json()).connection.state, 'idle');
+  const stoppedCount = serverSockets.length;
+  await mf.dispose(); mf = new Miniflare(options);
+  await publicSnapshot();
+  assert.equal(serverSockets.length, stoppedCount, 'Explicit disconnect survives object restarts');
+  identity.expires_in = 1;
+  await owner('/me/connect', 'POST', {});
+  await waitFor(async () => (await (await publicSnapshot()).json()).connection?.state === 'auth-required');
+  identity.expires_in = 3600;
+  console.log('Passed server-only Twitch events with settings closed, backend restart recovery, idempotent connection, revocation, explicit disconnect, and credential-free public snapshots.');
   assert.equal((await mf.dispatchFetch(`${api}/webhook`, { method: 'POST', body: '{}' })).status, 410);
-  console.log('Passed secret-free WebSocket event relay, all triggers, server filtering, ownership, deduplication, anonymous/gift behavior, persistence/restart, and manual OBS tests.');
+  console.log('Passed authenticated WebSocket event relay, all triggers, server filtering, ownership, deduplication, anonymous/gift behavior, persistence/restart, and manual OBS tests.');
 } finally { await mf.dispose(); await fs.rm(persistDir, { recursive: true, force: true }); }

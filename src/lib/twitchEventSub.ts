@@ -19,6 +19,7 @@ export function eventSubSubscriptions(config: DancefloorConfig, broadcasterId: s
   }));
 }
 export function connectTwitchEventSub(options: {
+  createSocket?: (url: string) => Promise<WebSocket>;
   token: string; clientId: string; broadcasterId: string; config: DancefloorConfig;
   onNotification: (message: TwitchNotification) => Promise<void>;
   onStatus: (status: TwitchEventStatus) => void; onAuthExpired?: () => void;
@@ -28,6 +29,8 @@ export function connectTwitchEventSub(options: {
   let stopped = false;
   let live: WebSocket | null = null;
   let replacement: WebSocket | null = null;
+  let pendingSockets = 0;
+  let pendingReplacement = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
   let attempts = 0;
@@ -104,7 +107,7 @@ export function connectTwitchEventSub(options: {
     forget(socket); socket.close();
     if (replacement === socket) replacement = null;
     if (live === socket) live = null;
-    if (!live && !replacement) scheduleReconnect();
+    if (!live && !replacement && !pendingSockets) scheduleReconnect();
   };
   const arm = (socket: WebSocket, milliseconds: number) => {
     clearTimeout(watchdogs.get(socket));
@@ -122,7 +125,7 @@ export function connectTwitchEventSub(options: {
         });
         if (!response.ok) {
           let detail = 'Unable to subscribe.';
-          try { const body = await response.json(); if (typeof body.message === 'string') detail = body.message.slice(0, 240); } catch { /* No JSON response. */ }
+          try { const body = await response.json() as { message?: unknown } | null; if (typeof body?.message === 'string') detail = body.message.slice(0, 240); } catch { /* No JSON response. */ }
           throw Object.assign(new Error(`${subscription.type} (${response.status}): ${detail}`), { status: response.status });
         }
       }));
@@ -140,48 +143,57 @@ export function connectTwitchEventSub(options: {
   };
   const open = (url: string, transferring: boolean) => {
     if (stopped) return;
-    let socket: WebSocket;
-    try { socket = new WebSocket(url); } catch { scheduleReconnect(); return; }
-    sockets.add(socket);
-    if (transferring) replacement = socket;
-    else report('connecting', 'Connecting to Twitch EventSub…');
-    arm(socket, 10000);
-    socket.addEventListener('message', event => {
-      if (stopped || !sockets.has(socket)) return;
-      let message: any;
-      try { message = JSON.parse(String(event.data)); } catch { return; }
-      const kind = message.metadata?.message_type;
-      if (kind === 'session_welcome') {
-        const session = message.payload?.session;
-        if (typeof session?.id !== 'string' || !session.id) { lost(socket); return; }
-        const old = live;
-        live = socket; if (replacement === socket) replacement = null;
-        const seconds = Number(session.keepalive_timeout_seconds);
-        keepalives.set(socket, Number.isFinite(seconds) && seconds >= 10 ? seconds * 1000 + 1000 : 31000);
-        arm(socket, keepalives.get(socket)!);
-        if (old && old !== socket) { forget(old); old.close(); }
-        if (transferring) { attempts = 0; report('listening', 'Listening for Twitch events. Keep this page open while streaming.'); }
-        else void subscribe(session.id, socket);
-      } else if (kind === 'session_keepalive' || kind === 'notification') {
-        arm(socket, keepalives.get(socket) ?? 31000);
-        if (kind === 'notification') enqueue(message as TwitchNotification);
-      } else if (kind === 'session_reconnect' && !replacement) {
-        try {
-          const reconnectUrl = message.payload.session.reconnect_url;
-          if (typeof reconnectUrl !== 'string') throw new Error('Invalid reconnect URL');
-          const target = new URL(reconnectUrl);
-          if (target.protocol !== 'wss:' || target.hostname !== 'eventsub.wss.twitch.tv' || target.username || target.password) throw new Error('Invalid reconnect URL');
-          report('reconnecting', 'Twitch is moving the connection. Reconnecting…');
-          open(reconnectUrl, true);
-        } catch { lost(socket); }
-      } else if (kind === 'revocation') {
-        const reason = message.payload?.subscription?.status;
-        if (reason === 'authorization_revoked' || reason === 'user_removed') authExpired();
-        else { report('error', 'Twitch revoked an event subscription. Check your triggers and reconnect Twitch.'); stop(); }
-      }
-    });
-    socket.addEventListener('close', () => lost(socket));
-    socket.addEventListener('error', () => lost(socket));
+    const attach = (socket: WebSocket) => {
+      if (stopped) { socket.close(); return; }
+      sockets.add(socket);
+      if (transferring) replacement = socket;
+      else report('connecting', 'Connecting to Twitch EventSub…');
+      arm(socket, 10000);
+      socket.addEventListener('message', event => {
+        if (stopped || !sockets.has(socket)) return;
+        let message: any;
+        try { message = JSON.parse(String(event.data)); } catch { return; }
+        const kind = message.metadata?.message_type;
+        if (kind === 'session_welcome') {
+          const session = message.payload?.session;
+          if (typeof session?.id !== 'string' || !session.id) { lost(socket); return; }
+          const old = live;
+          live = socket; if (replacement === socket) replacement = null;
+          const seconds = Number(session.keepalive_timeout_seconds);
+          keepalives.set(socket, Number.isFinite(seconds) && seconds >= 10 ? seconds * 1000 + 1000 : 31000);
+          arm(socket, keepalives.get(socket)!);
+          if (old && old !== socket) { forget(old); old.close(); }
+          if (transferring) { attempts = 0; report('listening', 'Listening for Twitch events. Keep this page open while streaming.'); }
+          else void subscribe(session.id, socket);
+        } else if (kind === 'session_keepalive' || kind === 'notification') {
+          arm(socket, keepalives.get(socket) ?? 31000);
+          if (kind === 'notification') enqueue(message as TwitchNotification);
+        } else if (kind === 'session_reconnect' && !replacement && !pendingReplacement) {
+          try {
+            const reconnectUrl = message.payload.session.reconnect_url;
+            if (typeof reconnectUrl !== 'string') throw new Error('Invalid reconnect URL');
+            const target = new URL(reconnectUrl);
+            if (target.protocol !== 'wss:' || target.hostname !== 'eventsub.wss.twitch.tv' || target.username || target.password) throw new Error('Invalid reconnect URL');
+            report('reconnecting', 'Twitch is moving the connection. Reconnecting…');
+            open(reconnectUrl, true);
+          } catch { lost(socket); }
+        } else if (kind === 'revocation') {
+          const reason = message.payload?.subscription?.status;
+          if (reason === 'authorization_revoked' || reason === 'user_removed') authExpired();
+          else { report('error', 'Twitch revoked an event subscription. Check your triggers and reconnect Twitch.'); stop(); }
+        }
+      });
+      socket.addEventListener('close', () => lost(socket));
+      socket.addEventListener('error', () => lost(socket));
+    };
+    if (options.createSocket) {
+      pendingSockets++; if (transferring) pendingReplacement = true;
+      void options.createSocket(url).then(socket => {
+        pendingSockets--; if (transferring) pendingReplacement = false; attach(socket);
+      }).catch(() => {
+        pendingSockets--; if (transferring) pendingReplacement = false; scheduleReconnect();
+      });
+    } else { try { attach(new WebSocket(url)); } catch { scheduleReconnect(); } }
   };
   open(ENDPOINT, false);
   return stop;

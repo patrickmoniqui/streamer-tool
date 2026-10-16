@@ -1,3 +1,6 @@
 # Optional: only needed when overriding the frontend VITE_TWITCH_CLIENT_ID.
 TWITCH_CLIENT_ID="6vii4ube47seid33yqelo7gdh3cxz9"
-# Dancefloor WebSocket mode needs no Twitch client secret or webhook secrets.
+# npm run dev initializes a local encryption key automatically.
+# Production uses a Worker secret, never a VITE_ environment variable.
+DANCEFLOOR_ENCRYPTION_KEY=replace-with-at-least-32-random-characters
+# No Twitch client secret or webhook secret is needed.

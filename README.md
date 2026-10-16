@@ -365,41 +365,45 @@ browser source. Settings are at `/dancefloor/`; each channel has a permanent
 3. Allow the Twitch sign-in popup, select your triggers, and **Save changes**.
 4. Confirm the status says **Listening for Twitch events**.
 5. Copy the OBS URL into a 1920 × 1080 Browser Source.
-6. **Keep the signed-in Dancefloor settings page open while streaming.**
+6. Once the status says **Listening for Twitch events in the background**, close settings if desired.
 
-The settings page connects directly to `wss://eventsub.wss.twitch.tv/ws` using the
-streamer's user access token. It subscribes through Twitch's Helix API after the
-WebSocket welcome message. No Twitch client secret, public webhook, HTTPS tunnel,
-server-side OAuth callback, encryption key, or repair cron is needed for Dancefloor.
-The Worker remains necessary for saved profiles, avatar caching, and sharing the
-floor with OBS. OBS polls its public snapshot every two seconds.
+Each channel's Durable Object connects to `wss://eventsub.wss.twitch.tv/ws` and
+subscribes with the streamer's user access token after the welcome message.
+Settings starts the connection once; closing settings, signing out of the browser
+by closing the tab, or closing OBS does not stop it. **Stop background connection**
+or the shared account's **Disconnect** button stops it explicitly. OBS polls its
+public snapshot every two seconds and contains no credentials.
 
-The same Twitch application/public Client ID is used as Globe. The popup reuses
-Globe's registered settings callback, so register the exact Globe settings URL in
-the Twitch developer console (including `http://localhost:5173/globe/` for local
-work). Optional `VITE_TWITCH_CLIENT_ID` / `VITE_TWITCH_REDIRECT_URI` overrides follow
-Globe's existing rules. If overriding the frontend Client ID, set the Worker's
-`TWITCH_CLIENT_ID` to match. The shared browser-tab session survives reloads and
-tool navigation. Tokens are removed from the callback URL immediately and never
-enter D1 or the OBS URL. Use one settings page per channel.
+The same Twitch application/public Client ID and Globe popup callback are used.
+Register the exact Globe settings URL in Twitch (including
+`http://localhost:5173/globe/` for local work). Optional `VITE_TWITCH_CLIENT_ID` /
+`VITE_TWITCH_REDIRECT_URI` overrides follow Globe's rules. If overriding the Client
+ID, set the Worker's `TWITCH_CLIENT_ID` to match. No Twitch client secret, webhook,
+HTTPS tunnel, or separate OAuth callback is needed.
 
-To test a channel point reward, keep the signed-in Dancefloor settings page open,
-enable the reward trigger, select the existing reward, and click **Save changes**.
-Wait for **Listening for Twitch events** before redeeming. The **Live floor** view
-shows the same dancers as OBS; simulation buttons switch to a separate local
-preview. The last-event message confirms delivery to the overlay service.
+The browser-tab session still supports navigating between tools. For background
+events, the owner-authenticated connect endpoint encrypts the validated token
+with AES-GCM and channel-specific authenticated data before storing it in the
+Durable Object. The encryption key is a Worker secret; tokens never enter public
+snapshots, OBS links, D1 profiles, or logs. Open settings once after upgrading from
+the browser receiver to start the background connection.
 
-Closing the settings page stops new events even if OBS stays open. Events missed
-while the socket is disconnected are not replayed by Twitch. Existing dancers and
-queue timers continue on the Worker. If OBS alone is closed, leaving settings open
-still receives events; reopening OBS shows only the current dancers.
+Enable the reward trigger, choose the existing reward, and **Save changes**.
+After the background status says **Listening**, redeem the reward. The live floor
+shows the current OBS dancers; simulation buttons remain local. Connection status
+and last-event feedback are supplied by the backend.
 
-The client handles keepalives, reconnects, and recreates subscriptions after a lost
-connection. Twitch-directed handoffs keep the old socket until the replacement
-welcomes it, preserving existing subscriptions. Notifications are deduplicated;
-temporary Worker outages retry the owner relay for up to two minutes. Expired
-sign-in or revoked permissions prompt reconnection. There is no polling of Twitch
-for rewards/subscription events.
+The receiver handles keepalives, reconnect backoff, and Twitch-directed socket
+handoffs. Minute alarms restore the connection following an object restart;
+dancer/queue timers also advance without OBS. Tokens are validated at least hourly
+while active. The current implicit OAuth flow has no refresh token: expiration or
+revocation stops the receiver and requests sign-in again. A temporary network
+failure retries automatically. Twitch cannot replay notifications missed during
+an actual network outage; closing settings is no longer a network outage.
+
+Outgoing Durable Object WebSockets do not hibernate and count toward Cloudflare
+active-duration usage. Disabling all triggers closes the socket; stopping the
+background connection also deletes its encrypted credential.
 
 ### Triggers, appearance, and queue
 
@@ -444,20 +448,27 @@ npm run deploy:worker
 npm run build
 ```
 
-Keep the `DANCEFLOOR_ROOMS` Durable Object binding and its existing SQLite migration.
-D1 stores profiles/avatar cache; one persistent room per Twitch user stores the
-floor and advances its timers with alarms. No new schema migration is required
-when switching from the previous webhook implementation. Existing saved profiles
-and OBS URLs remain valid. Obsolete stored OAuth credentials are cleared upon the
-next authenticated request. The old webhook endpoint returns 410, and the repair
-cron is removed; no new webhook subscriptions are created.
+Keep `DANCEFLOOR_ROOMS` and its existing SQLite migration. D1 stores profiles and
+avatar/chat-color caches; the channel room stores dancers, alarms, connection
+status, and the encrypted Twitch credential. Existing profiles and OBS links stay
+valid. The legacy webhook endpoint returns 410.
+
+Production requires a strong random `DANCEFLOOR_ENCRYPTION_KEY` Worker secret.
+The GitHub Worker workflow provisions it from the repository secret of the same
+name before deployment. For a manual deployment, provision it with
+`npx wrangler secret put DANCEFLOOR_ENCRYPTION_KEY --config worker/wrangler.toml`.
+Keep the key stable across deployments; replacing it requires owners to reconnect.
+Never use a `VITE_` variable for this key. `npm run dev` generates a separate key in
+the ignored `worker/.dev.vars` file automatically, without replacing other values.
 
 `GET /api/dancefloor/channels/:channel/snapshot` is public and returns appearance,
-active dancers, absolute expiries, server time, revision, and queue/drop counts.
+active dancers, absolute expiries, server time, revision, queue/drop counts, and non-secret connection status.
 Other endpoints validate the broadcaster's Bearer token and select the channel
 from its verified Twitch identity:
 
 - `GET /api/dancefloor/me`: saved configuration and floor snapshot
+- `POST /api/dancefloor/me/connect`: start/resume the encrypted background connection
+- `POST /api/dancefloor/me/disconnect`: stop it and delete the stored credential
 - `GET /api/dancefloor/me/rewards`: existing channel rewards
 - `PUT /api/dancefloor/me/profile`: validate/save configuration
 - `POST /api/dancefloor/me/events`: relay a WebSocket notification
@@ -483,19 +494,20 @@ npm run build
 Tests mock Twitch and WebSocket traffic and use temporary local D1/room storage.
 They cover all triggers, caps, queue expiry, duplicate delivery, server filtering,
 ownership, restart recovery, handoffs, reconnects, failed relay delivery, token
-expiry/revocation, and popup validation/cleanup.
+expiry/revocation, encryption, background-only delivery, backend restart recovery,
+explicit disconnect, and popup validation/cleanup.
 
 - If port 8787 refuses connections, stop the old Vite process and run `npm run dev`
   again so both services start. Frontend-only mode is `npm run dev:frontend`.
 - If sign-in cannot open, allow popups for the site. An invalid redirect error
   requires registering the exact Globe callback URL in Twitch.
 - If subscriptions fail, reconnect to grant the requested scopes, check the
-  selected reward is enabled, and keep only one listener page open for the channel.
+  selected reward is enabled, and inspect the backend connection status in settings.
 - If settings fail to save, verify the Worker is running, D1 is initialized, and
   its public Client ID matches the frontend's override.
 
 Before wider release, validate real rewards, cheers, sub variants, and gifts on
 one connected channel. Verify transparent rendering and crowded layouts in OBS,
-then close settings to confirm events stop and reopen/sign in to resume. Browser
+then close settings and confirm new events still reach OBS. Browser
 visual inspection and live Twitch validation require an available browser and
 channel; automated tests do not substitute for those checks.

@@ -100,6 +100,12 @@ try {
   reset(); stop = start({ config: { ...config, triggers: Object.fromEntries(Object.keys(config.triggers).map(k => [k, { enabled: false, durationSeconds: 60 }])) } });
   assert.equal(sockets.length, 0); assert.equal(statuses[0].state, 'idle'); stop();
   reset(); stop = start(); stop(); welcome(sockets[0]); await flush(); assert.equal(requests.length, 0, 'Stopped effects cannot create subscriptions');
+  reset(); stop = start({ createSocket: async url => new Socket(url) }); await flush();
+  welcome(sockets[0]); await flush(); assert.equal(statuses.at(-1).state, 'listening'); stop();
+  reset(); let completeHandshake;
+  stop = start({ createSocket: () => new Promise(resolve => { completeHandshake = resolve; }) });
+  stop(); const lateSocket = new Socket('wss://eventsub.wss.twitch.tv/ws'); completeHandshake(lateSocket); await flush();
+  assert.equal(lateSocket.closed, true, 'Stopping during an asynchronous server handshake closes the late socket');
   console.log('Passed WebSocket subscriptions, notifications, deduplication, keepalive, seamless handoff, reconnect/resubscribe, relay retries, auth/revocation, disabled triggers, and cleanup.');
 } finally {
   globalThis.fetch = real.fetch; globalThis.WebSocket = real.WebSocket;

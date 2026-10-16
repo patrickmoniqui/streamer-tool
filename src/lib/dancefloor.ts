@@ -18,11 +18,18 @@ export interface DancefloorDancer {
   enteredAt: number;
   expiresAt: number;
 }
+export interface DancefloorConnection {
+  state: 'idle' | 'connecting' | 'listening' | 'reconnecting' | 'delayed' | 'error' | 'auth-required';
+  message: string;
+  lastEvent?: string;
+  lastReceivedAt?: number;
+}
 export interface DancefloorSnapshot {
   config: DancefloorConfig;
   dancers: DancefloorDancer[];
   serverTime: number;
   revision: number;
+  connection?: DancefloorConnection;
   queueCount: number;
   droppedCount: number;
 }

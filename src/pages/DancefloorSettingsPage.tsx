@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { connectBrowserTwitch } from '../lib/twitchBrowserConnect';
 import { getBrowserTwitchIdentity, subscribeBrowserTwitch } from '../lib/twitchConnect';
 import { TwitchConnection } from '../components/TwitchConnection';
-import { useDancefloorEvents } from '../lib/useDancefloorEvents';
 import { Dancefloor } from '../components/Dancefloor';
 import { dancefloorRequest } from '../lib/dancefloorClient';
 import { DEFAULT_DANCEFLOOR_CONFIG, validateDancefloorConfig, DANCE_TRIGGERS, dancefloorOverlayUrl, type DancefloorConfig, type DancefloorDancer, type DancefloorSnapshot, type DanceTrigger } from '../lib/dancefloor';
@@ -22,7 +21,7 @@ export function DancefloorSettingsPage() {
   const [simulation, setSimulation] = useState(false);
   const [dancers, setDancers] = useState<DancefloorDancer[]>(demoDancers);
   const [saved, setSaved] = useState(false);
-  const eventStatus = useDancefloorEvents(browserIdentity, account?.login === browserIdentity?.login ? account?.config : undefined);
+  const eventStatus = account?.snapshot.connection ?? { state: 'idle', message: 'Connect Twitch to start the background event receiver.', lastEvent: '' };
   const accountRef = useRef(account); accountRef.current = account;
   const loadAccount = async (loadConfig = false) => {
     const next = await dancefloorRequest<Account>('/me');
@@ -32,7 +31,8 @@ export function DancefloorSettingsPage() {
   };
   useEffect(() => {
     let stopped = false;
-    void dancefloorRequest<Account>('/me').then(next => {
+    const connect = browserIdentity ? dancefloorRequest('/me/connect', 'POST', {}).then(() => dancefloorRequest<Account>('/me')) : dancefloorRequest<Account>('/me');
+    void connect.then(next => {
       if (stopped) return;
       setAccount(next); setConfig(next.config); setSaved(true);
       void dancefloorRequest<Reward[]>('/me/rewards').then(r => { if (!stopped) setRewards(r); }).catch(e => { if (!stopped) setRewardError(e.message); });
@@ -54,11 +54,12 @@ export function DancefloorSettingsPage() {
     <TwitchConnection/>
     <div className="dance-title"><div><p className="dance-eyebrow">TURN SUPPORT INTO A PARTY</p><h1>Dancefloor</h1><p>Your community, stick figures, and 10 Fortnite-inspired moves.</p></div><span className="dance-beta">Experimental</span></div>
     <div className="dance-layout"><section className="dance-controls" aria-label="Dancefloor settings">
-      <div className="dance-panel"><h2>1. Connect your channel</h2><p>Connect Twitch, choose your triggers, and keep this page open while streaming. Events arrive through a direct WebSocket connection.</p>
+      <div className="dance-panel"><h2>1. Connect your channel</h2><p>Connect Twitch and choose your triggers. The server receives Twitch events over WebSocket, even after you close this page.</p>
         <button className="dance-button" disabled={busy} onClick={() => void action(async () => { await connectBrowserTwitch(); })}>{account ? `Switch ${account.login}` : 'Connect with Twitch'}</button>
+        {account && <div className="dance-actions"><button disabled={busy} onClick={() => void action(async () => { await dancefloorRequest('/me/connect', 'POST', {}); await loadAccount(); })}>Resume background connection</button><button disabled={busy} onClick={() => void action(async () => { await dancefloorRequest('/me/disconnect', 'POST', {}); await loadAccount(); })}>Stop background connection</button></div>}
         <p className="dance-status" role="status" data-event-state={eventStatus.state}>{eventStatus.message}</p>
         {eventStatus.lastEvent && <p role="status">{eventStatus.lastEvent}</p>}
-        <p>Closing this page stops new Twitch events. Events missed while disconnected cannot be recovered.</p>
+        <p>You can close settings after the status says Listening. Reconnect here if Twitch expires or revokes your sign-in.</p>
       </div>
       <div className="dance-panel"><h2>2. Choose what starts a dance</h2><p>Each event adds dance time, up to five minutes per viewer. Gift recipients do not join automatically.</p>
         {dirty && <p role="status">Trigger changes are not active yet. Click Save changes before redeeming a reward.</p>}
@@ -85,7 +86,7 @@ export function DancefloorSettingsPage() {
     <aside className="dance-preview-column"><div className="dance-panel dance-preview-panel"><div className="dance-preview-heading"><h2>{account && !simulation ? 'Live floor' : 'Preview'}</h2><span>{account && !simulation ? 'LIVE · SAME DANCERS AS OBS' : 'LOCAL SIMULATION'}</span></div><div className="dance-preview"><Dancefloor config={config} dancers={account && !simulation ? account.snapshot.dancers : dancers.slice(0, config.maxDancers)}/></div>
       <div className="dance-actions"><button onClick={() => { setSimulation(true); setDancers(demoDancers()); }}>Simulate dancers</button><button onClick={() => { setSimulation(true); setDancers(Array.from({ length: config.maxDancers }, (_, i) => ({ id: `crowd:${i}`, name: `Viewer${i + 1}`, avatarUrl: '', enteredAt: Date.now(), expiresAt: Date.now() + 60000 }))); }}>Fill floor</button><button onClick={() => { setSimulation(true); setDancers([]); }}>Clear preview</button>{account && <button onClick={() => setSimulation(false)}>Show live floor</button>}</div><p>{account && !simulation ? 'Real redemptions and Test in OBS appear here. Appearance changes stay here until saved.' : 'Simulated dancers stay here and are never sent to OBS.'} The overlay is silent.</p>
     </div>
-    <div className="dance-panel"><h2>4. Add to OBS</h2><p className="dance-status"><strong>Keep this settings tab open while streaming.</strong> The OBS source alone does not receive Twitch events.</p><p>Add a Browser Source at 1920 × 1080. Position or crop the bottom strip to fit your scene.</p>
+    <div className="dance-panel"><h2>4. Add to OBS</h2><p className="dance-status"><strong>Settings can stay closed while streaming.</strong> The background connection keeps receiving Twitch events.</p><p>Add a Browser Source at 1920 × 1080. Position or crop the bottom strip to fit your scene.</p>
       {account && saved ? <><label>Permanent browser source URL<input className="dance-url" readOnly value={dancefloorOverlayUrl(account.login)}/></label><div className="dance-actions"><button onClick={() => void action(async () => { await navigator.clipboard.writeText(dancefloorOverlayUrl(account.login)); setNotice('OBS URL copied.'); })}>Copy OBS URL</button><a href={dancefloorOverlayUrl(account.login)} target="_blank" rel="noreferrer">Open overlay ↗</a></div>
         <p className="dance-status">{account.snapshot.dancers.length} dancing · {account.snapshot.queueCount} waiting · {account.snapshot.droppedCount} dropped / expired in queue</p>
         <div className="dance-actions"><button disabled={busy} onClick={() => void action(async () => { await dancefloorRequest('/me/test', 'POST', {}); await loadAccount(); setNotice('Test dancer sent to OBS using saved settings.'); })}>Test in OBS</button><button disabled={busy} onClick={() => void action(async () => { await dancefloorRequest('/me/clear', 'POST', {}); await loadAccount(); setNotice('Live floor and queue cleared.'); })}>Clear live floor</button></div></> : <p className="dance-muted">Your permanent link appears after connecting Twitch.</p>}

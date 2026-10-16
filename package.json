@@ -12,7 +12,7 @@
     "version:patch": "npm version patch --no-git-tag-version",
     "version:minor": "npm version minor --no-git-tag-version",
     "version:major": "npm version major --no-git-tag-version",
-    "dev:worker": "npm run dev:db && wrangler dev --config worker/wrangler.toml --port 8787",
+    "dev:worker": "node scripts/init-dancefloor-local.mjs && npm run dev:db && wrangler dev --config worker/wrangler.toml --port 8787",
     "deploy:worker": "wrangler deploy --config worker/wrangler.toml",
     "dev:frontend": "vite",
     "dev:db": "wrangler d1 execute ANALYTICS_DB --local --config worker/wrangler.toml --file worker/sql/dancefloor.sql"

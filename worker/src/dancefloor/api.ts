@@ -4,11 +4,12 @@ export interface DancefloorEnv {
   ANALYTICS_DB?: D1Database;
   DANCEFLOOR_ROOMS?: DurableObjectNamespace;
   TWITCH_CLIENT_ID?: string;
+  DANCEFLOOR_ENCRYPTION_KEY?: string;
 }
 interface Profile { user_id: string; login: string; config: string }
 function fail(message: string, status = 400): never { throw Object.assign(new Error(message), { status }); }
 function db(env: DancefloorEnv) { return env.ANALYTICS_DB ?? fail('Dancefloor storage is unavailable. Start the Worker to save settings.', 503); }
-function clientId(env: DancefloorEnv) { return env.TWITCH_CLIENT_ID?.trim() || '6vii4ube47seid33yqelo7gdh3cxz9'; }
+export function clientId(env: DancefloorEnv) { return env.TWITCH_CLIENT_ID?.trim() || '6vii4ube47seid33yqelo7gdh3cxz9'; }
 function bearer(request: Request) { return request.headers.get('Authorization')?.match(/^Bearer (.+)$/)?.[1] ?? fail('Connect with Twitch to manage Dancefloor.', 401); }
 export async function sharedTwitchIdentity(request: Request, env: DancefloorEnv) {
   const response = await fetch('https://id.twitch.tv/oauth2/validate', { signal: AbortSignal.timeout(5000), headers: { Authorization: `OAuth ${bearer(request)}` } });
@@ -16,7 +17,7 @@ export async function sharedTwitchIdentity(request: Request, env: DancefloorEnv)
   const identity = await response.json() as { client_id: string; user_id: string; login: string; expires_in: number };
   if (!response.ok || typeof identity.user_id !== 'string' || !identity.user_id || typeof identity.login !== 'string' || !/^[a-z0-9_]+$/i.test(identity.login) || !Number.isFinite(identity.expires_in) || identity.expires_in <= 0) fail('Twitch sign-in expired. Please connect again.', 401);
   if (identity.client_id !== clientId(env)) fail('This Twitch account was connected with a different application.', 403);
-  return { userId: identity.user_id, login: identity.login.toLowerCase() };
+  return { userId: identity.user_id, login: identity.login.toLowerCase(), expiresAt: Date.now() + identity.expires_in * 1000 };
 }
 export function sharedTwitchCors(_request: Request, _env: DancefloorEnv, headers = new Headers()) {
   headers.set('Access-Control-Allow-Origin', '*');
@@ -62,6 +63,30 @@ async function appearance(request: Request, env: DancefloorEnv, userId: string) 
   const [avatarUrl, color] = await Promise.all([avatar(request, env, userId), chatColor(request, env, userId)]);
   return { avatarUrl, chatColor: color };
 }
+export async function resolveDanceNotification(request: Request, env: DancefloorEnv, ownerId: string, config: DancefloorConfig, payload: any) {
+    const metadata = payload?.metadata;
+    const subscription = payload?.payload?.subscription;
+    const event = payload?.payload?.event;
+    // Twitch message IDs are opaque strings, including padded Base64. Do not
+    // restrict them to UUID/URL-safe characters; they are used only for deduplication.
+    if (metadata?.message_type !== 'notification' || typeof metadata.message_id !== 'string' ||
+        metadata.message_id.length < 1 || metadata.message_id.length > 512 || /[\u0000-\u001f\u007f]/.test(metadata.message_id)) fail('Invalid Twitch notification metadata.', 403);
+    if (subscription?.transport?.method !== 'websocket') fail('Invalid Twitch event transport.', 403);
+    if (event?.broadcaster_user_id !== ownerId || subscription?.condition?.broadcaster_user_id !== ownerId) fail('Twitch event channel does not match the connected account.', 403);
+    if (typeof subscription.type !== 'string' || subscription.type !== metadata.subscription_type) fail('Twitch event type does not match its subscription.', 403);
+    const occurredAt = Date.parse(metadata.message_timestamp);
+    if (!Number.isFinite(occurredAt) || Math.abs(Date.now() - occurredAt) > 600000) fail('This event is too old.');
+    const trigger = qualifyingTrigger(config, subscription.type, event);
+    if (!trigger) return null;
+    const anonymous = event.is_anonymous === true || !event.user_id;
+    if (!anonymous && (typeof event.user_id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(event.user_id))) fail('Invalid viewer.');
+    const viewerId = anonymous ? `anonymous:${metadata.message_id}` : event.user_id;
+    const name = anonymous ? 'Anonymous' : String(event.user_name || event.user_login || 'Viewer').slice(0, 100);
+    return {
+      id: metadata.message_id, viewerId, name, ...(anonymous ? { avatarUrl: '', chatColor: '' } : await appearance(request, env, viewerId)),
+      durationSeconds: config.triggers[trigger].durationSeconds, occurredAt,
+    };
+}
 async function route(request: Request, env: DancefloorEnv): Promise<Response> {
   const path = new URL(request.url).pathname.replace('/api/dancefloor', '');
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
@@ -74,12 +99,15 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
     return Response.json(await room(env, p.user_id));
   }
   const owner = await sharedTwitchIdentity(request, env);
-  // Retain existing saved profiles, but remove obsolete server OAuth credentials.
-  await db(env).prepare("INSERT INTO dancefloor_profiles (user_id, login, config, connected, status, updated_at) VALUES (?, ?, ?, 0, 'WebSocket', ?) ON CONFLICT(user_id) DO UPDATE SET login = excluded.login, credentials = NULL, connected = 0, status = 'WebSocket' WHERE login <> excluded.login OR credentials IS NOT NULL OR connected <> 0 OR status <> 'WebSocket'")
+  await db(env).prepare("INSERT INTO dancefloor_profiles (user_id, login, config, connected, status, updated_at) VALUES (?, ?, ?, 0, 'Backend WebSocket', ?) ON CONFLICT(user_id) DO UPDATE SET login = excluded.login, credentials = NULL WHERE login <> excluded.login OR credentials IS NOT NULL")
     .bind(owner.userId, owner.login, JSON.stringify(DEFAULT_DANCEFLOOR_CONFIG), Date.now()).run();
   const p = (await db(env).prepare('SELECT * FROM dancefloor_profiles WHERE user_id = ?').bind(owner.userId).first<Profile>())!;
   const config = JSON.parse(p.config) as DancefloorConfig;
   if (path === '/me' && request.method === 'GET') return Response.json({ login: p.login, transport: 'websocket', config, snapshot: await room(env, p.user_id) });
+  if (path === '/me/connect' && request.method === 'POST') {
+    if (!env.DANCEFLOOR_ENCRYPTION_KEY) fail('Dancefloor background connection is not configured.', 503);
+    return Response.json(await room(env, p.user_id, '/connect', { token: bearer(request), userId: owner.userId, expiresAt: owner.expiresAt }));
+  }
   if (path === '/me/rewards' && request.method === 'GET') return Response.json((await helix(request, env, `channel_points/custom_rewards?broadcaster_id=${encodeURIComponent(p.user_id)}`)).data);
   if (path === '/me/profile' && request.method === 'PUT') {
     let next: DancefloorConfig;
@@ -96,31 +124,12 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
   if (path === '/me/events' && request.method === 'POST') {
     // This is an authenticated owner relay, not a public Twitch webhook. Never
     // trust the supplied duration, avatar, channel, or trigger qualification.
-    const payload = await request.json() as any;
-    const metadata = payload?.metadata;
-    const subscription = payload?.payload?.subscription;
-    const event = payload?.payload?.event;
-    // Twitch message IDs are opaque strings, including padded Base64. Do not
-    // restrict them to UUID/URL-safe characters; they are used only for deduplication.
-    if (metadata?.message_type !== 'notification' || typeof metadata.message_id !== 'string' ||
-        metadata.message_id.length < 1 || metadata.message_id.length > 512 || /[\u0000-\u001f\u007f]/.test(metadata.message_id)) fail('Invalid Twitch notification metadata.', 403);
-    if (subscription?.transport?.method !== 'websocket') fail('Invalid Twitch event transport.', 403);
-    if (event?.broadcaster_user_id !== p.user_id || subscription?.condition?.broadcaster_user_id !== p.user_id) fail('Twitch event channel does not match the connected account.', 403);
-    if (typeof subscription.type !== 'string' || subscription.type !== metadata.subscription_type) fail('Twitch event type does not match its subscription.', 403);
-    const occurredAt = Date.parse(metadata.message_timestamp);
-    if (!Number.isFinite(occurredAt) || Math.abs(Date.now() - occurredAt) > 600000) fail('This event is too old.');
-    const trigger = qualifyingTrigger(config, subscription.type, event);
-    if (!trigger) return Response.json({ accepted: false });
-    const anonymous = event.is_anonymous === true || !event.user_id;
-    if (!anonymous && (typeof event.user_id !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(event.user_id))) fail('Invalid viewer.');
-    const viewerId = anonymous ? `anonymous:${metadata.message_id}` : event.user_id;
-    const name = anonymous ? 'Anonymous' : String(event.user_name || event.user_login || 'Viewer').slice(0, 100);
+    const current = await room(env, p.user_id);
+    if (current.connection && ['connecting', 'listening', 'reconnecting', 'delayed'].includes(current.connection.state)) fail('This channel now receives events in the background. Refresh Dancefloor settings to stop the old browser relay.', 409);
+    const event = await resolveDanceNotification(request, env, p.user_id, config, await request.json());
+    if (!event) return Response.json({ accepted: false });
     await room(env, p.user_id, '/config', config);
-    const result = await room(env, p.user_id, '/event', {
-      id: metadata.message_id, viewerId, name, ...(anonymous ? { avatarUrl: '', chatColor: '' } : await appearance(request, env, viewerId)),
-      durationSeconds: config.triggers[trigger].durationSeconds, occurredAt,
-    });
-    return Response.json({ accepted: true, snapshot: result });
+    return Response.json({ accepted: true, snapshot: await room(env, p.user_id, '/event', event) });
   }
   if (path === '/me/test' && request.method === 'POST') {
     await room(env, p.user_id, '/config', config);
@@ -128,7 +137,7 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
   }
   if (path === '/me/clear' && request.method === 'POST') return Response.json(await room(env, p.user_id, '/clear', {}));
   if (path === '/me/disconnect' && request.method === 'POST') {
-    await room(env, p.user_id, '/clear', {});
+    await room(env, p.user_id, '/disconnect', {});
     return Response.json({ disconnected: true });
   }
   fail('Not found.', 404);

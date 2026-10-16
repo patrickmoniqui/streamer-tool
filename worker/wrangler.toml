@@ -18,7 +18,8 @@ TWITCH_SESSION_TTL_SECONDS = "86400"
 # Optional: match a frontend VITE_TWITCH_CLIENT_ID override.
 # TWITCH_CLIENT_ID = "your-twitch-client-id"
 
-# Dancefloor stores settings and dancer state; Twitch events use browser WebSockets.
+# Dancefloor owns the background Twitch WebSocket and encrypted credentials.
+# Set DANCEFLOOR_ENCRYPTION_KEY with wrangler secret put (never a public var).
 [[durable_objects.bindings]]
 name = "DANCEFLOOR_ROOMS"
 class_name = "DancefloorRoom"
