@@ -3,10 +3,12 @@ import type { DancefloorConfig } from './dancefloor';
 import { dancefloorRequest } from './dancefloorClient';
 import { clearBrowserTwitch, getTwitchClientId, getTwitchConnectToken, refreshTwitchConnectToken, type TwitchIdentity } from './twitchConnect';
 import { connectTwitchEventSub, eventSubSubscriptions, type TwitchEventStatus } from './twitchEventSub';
-export function useDancefloorEvents(identity: TwitchIdentity | null, config?: DancefloorConfig): TwitchEventStatus {
+export function useDancefloorEvents(identity: TwitchIdentity | null, config?: DancefloorConfig): TwitchEventStatus & { lastEvent: string } {
   const [status, setStatus] = useState<TwitchEventStatus>({ state: 'idle', message: 'Connect with Twitch to start receiving events.' });
+  const [lastEvent, setLastEvent] = useState('');
   const key = JSON.stringify(config ? eventSubSubscriptions(config, identity?.userId ?? '') : []);
   useEffect(() => {
+    setLastEvent('');
     const token = getTwitchConnectToken();
     if (!identity || !token || !config) {
       setStatus({ state: 'idle', message: identity ? 'Loading saved settings…' : 'Connect with Twitch to start receiving events.' });
@@ -23,7 +25,8 @@ export function useDancefloorEvents(identity: TwitchIdentity | null, config?: Da
         const e = message.payload.event;
         const event = Object.fromEntries(['broadcaster_user_id', 'user_id', 'user_name', 'user_login', 'is_anonymous', 'is_gift', 'bits', 'reward'].filter(k => k in e).map(k => [k, e[k]]));
         if (event.reward && typeof event.reward === 'object') event.reward = { id: (event.reward as { id?: string }).id };
-        await dancefloorRequest('/me/events', 'POST', { metadata: message.metadata, payload: { subscription: message.payload.subscription, event } }, controller.signal);
+        const result = await dancefloorRequest<{ accepted: boolean }>('/me/events', 'POST', { metadata: message.metadata, payload: { subscription: message.payload.subscription, event } }, controller.signal);
+        if (active) setLastEvent(result.accepted ? `Last event: ${String(event.user_name || event.user_login || 'Viewer')} received by the overlay service.` : 'Last event: ignored because it does not match the saved triggers.');
       },
     });
     // Expiry is checked locally each minute; validate with Twitch at least hourly.
@@ -39,5 +42,5 @@ export function useDancefloorEvents(identity: TwitchIdentity | null, config?: Da
     // Only published settings restart subscriptions; draft preview edits do not.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity, key]);
-  return status;
+  return { ...status, lastEvent };
 }

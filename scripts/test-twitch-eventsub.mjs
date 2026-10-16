@@ -37,7 +37,7 @@ try {
   globalThis.setTimeout = (fn, delay) => { const id = ++nextTimer; timers.set(id, { fn, at: time + delay }); return id; };
   globalThis.clearTimeout = id => timers.delete(id);
   globalThis.WebSocket = Socket;
-  globalThis.fetch = async (url, options) => { requests.push({ url, options, body: JSON.parse(options.body) }); return { ok: responseStatus === 202, status: responseStatus }; };
+  globalThis.fetch = async (url, options) => { requests.push({ url, options, body: JSON.parse(options.body) }); return { ok: responseStatus === 202, status: responseStatus, json: async () => ({ message: 'Missing required scope' }) }; };
   assert.equal(eventSubSubscriptions(config, '123').length, 5);
   assert.equal(eventSubSubscriptions(config, '123')[0].condition.reward_id, 'reward-1');
   let stop = start();
@@ -74,10 +74,26 @@ try {
   assert.equal(statuses.at(-1).state, 'delayed'); advance(1000); await flush(); assert.equal(received.length, 1);
   stop();
 
+  reset(); stop = start({ onNotification: async () => { throw Object.assign(new Error('Selected reward is unavailable.'), { status: 403 }); } });
+  welcome(sockets[0]); await flush();
+  const redemption = note('reward-relay');
+  redemption.metadata.subscription_type = 'channel.channel_points_custom_reward_redemption.add';
+  redemption.payload.subscription.type = redemption.metadata.subscription_type;
+  redemption.payload.subscription.condition.reward_id = 'reward-1';
+  redemption.payload.event = { broadcaster_user_id: '123', user_id: 'viewer', user_name: 'Viewer', reward: { id: 'reward-1' } };
+  sockets[0].message(redemption); await flush();
+  assert.equal(statuses.at(-1).state, 'error', 'A permanent relay error must not be overwritten by Listening');
+  assert.match(statuses.at(-1).message, /Selected reward is unavailable/);
+  stop();
+  reset(); stop = start(); welcome(sockets[0]); await flush();
+  sockets[0].message(redemption); await flush();
+  assert.equal(received[0].payload.event.reward.id, 'reward-1', 'Real redemption shape passes through the socket relay');
+  stop();
+
   reset(); responseStatus = 401; stop = start(); welcome(sockets[0]); await flush();
   assert.equal(authFailures, 1); assert.equal(statuses.at(-1).state, 'auth-required'); assert.equal(timers.size, 0); stop();
   reset(); responseStatus = 403; stop = start(); welcome(sockets[0]); await flush();
-  assert.equal(statuses.at(-1).state, 'error'); assert.equal(authFailures, 0); assert.equal(sockets[0].closed, true); stop();
+  assert.equal(statuses.at(-1).state, 'error'); assert.equal(authFailures, 0); assert.equal(sockets[0].closed, true); assert.match(statuses.at(-1).message, /Missing required scope/); stop();
   reset(); stop = start(); welcome(sockets[0]); await flush();
   sockets[0].message({ metadata: { message_type: 'revocation' }, payload: { subscription: { status: 'authorization_revoked' } } });
   assert.equal(authFailures, 1); assert.equal(timers.size, 0); stop();

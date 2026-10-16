@@ -57,6 +57,7 @@ export function connectTwitchEventSub(options: {
   const deliver = async () => {
     if (stopped || delivering || deliveryTimer || !queue.length) return;
     delivering = true;
+    let relayFailed = false;
     try {
       while (!stopped && queue.length) {
         const item = queue[0];
@@ -70,14 +71,16 @@ export function connectTwitchEventSub(options: {
           const status = (error as { status?: number }).status;
           if (status === 401) { authExpired(); return; }
           if (status && status >= 400 && status < 500 && status !== 429) {
-            queue.shift(); report('error', 'A Twitch event could not be relayed. Check your saved settings.'); continue;
+            queue.shift(); relayFailed = true;
+            const detail = error instanceof Error ? error.message : 'Check your saved settings.';
+            report('error', `Twitch event relay failed (${status}): ${detail}`); continue;
           }
           report('delayed', 'Receiving Twitch events; waiting for the overlay service to reconnect.');
           deliveryTimer = setTimeout(() => { deliveryTimer = undefined; void deliver(); }, Math.min(15000, 1000 * 2 ** Math.min(deliveryAttempts++, 4)));
           return;
         }
       }
-      if (live && !stopped) report('listening', 'Listening for Twitch events. Keep this page open while streaming.');
+      if (live && !stopped && !relayFailed) report('listening', 'Listening for Twitch events. Keep this page open while streaming.');
     } finally { delivering = false; }
   };
   const enqueue = (message: TwitchNotification) => {
@@ -117,7 +120,11 @@ export function connectTwitchEventSub(options: {
           headers: { Authorization: `Bearer ${options.token}`, 'Client-Id': options.clientId, 'Content-Type': 'application/json' },
           body: JSON.stringify({ ...subscription, transport: { method: 'websocket', session_id: sessionId } }),
         });
-        if (!response.ok) throw Object.assign(new Error('Subscription failed'), { status: response.status });
+        if (!response.ok) {
+          let detail = 'Unable to subscribe.';
+          try { const body = await response.json(); if (typeof body.message === 'string') detail = body.message.slice(0, 240); } catch { /* No JSON response. */ }
+          throw Object.assign(new Error(`${subscription.type} (${response.status}): ${detail}`), { status: response.status });
+        }
       }));
       if (!stopped && live === socket && sockets.has(socket)) {
         attempts = 0; report('listening', 'Listening for Twitch events. Keep this page open while streaming.');
@@ -126,8 +133,8 @@ export function connectTwitchEventSub(options: {
       if (stopped || !sockets.has(socket)) return;
       const status = (error as { status?: number }).status;
       if (status === 401) authExpired();
-      else if (status === 403 || status === 400) {
-        report('error', 'Twitch could not enable these triggers. Reconnect Twitch to grant permissions, or check the selected reward.'); stop();
+      else if (status && status >= 400 && status < 500 && status !== 429) {
+        report('error', `Twitch could not enable a trigger: ${(error as Error).message} Reconnect Twitch to grant permissions, or check the selected reward.`); stop();
       } else lost(socket);
     } finally { clearTimeout(timeout); controllers.delete(controller); }
   };

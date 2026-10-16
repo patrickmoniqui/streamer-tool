@@ -383,6 +383,12 @@ Globe's existing rules. If overriding the frontend Client ID, set the Worker's
 tool navigation. Tokens are removed from the callback URL immediately and never
 enter D1 or the OBS URL. Use one settings page per channel.
 
+To test a channel point reward, keep the signed-in Dancefloor settings page open,
+enable the reward trigger, select the existing reward, and click **Save changes**.
+Wait for **Listening for Twitch events** before redeeming. The **Live floor** view
+shows the same dancers as OBS; simulation buttons switch to a separate local
+preview. The last-event message confirms delivery to the overlay service.
+
 Closing the settings page stops new events even if OBS stays open. Events missed
 while the socket is disconnected are not replayed by Twitch. Existing dancers and
 queue timers continue on the Worker. If OBS alone is closed, leaving settings open
