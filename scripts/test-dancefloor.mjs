@@ -19,6 +19,17 @@ config.rewardId = 'reward-1';
 assert.throws(() => validateDancefloorConfig({ ...config, maxDancers: 51 }));
 assert.throws(() => validateDancefloorConfig({ ...config, rewardId: '' }));
 assert.deepEqual(validateDancefloorConfig(config), config);
+assert.throws(() => validateDancefloorConfig({ ...config, rewardId: '' }), /Select an existing channel point reward/);
+assert.throws(() => validateDancefloorConfig({ ...config, maxDancers: 0 }), /Maximum dancers/);
+assert.throws(() => validateDancefloorConfig({ ...config, triggers: { ...config.triggers, bits: { enabled: true, durationSeconds: 0 } } }), /Bits duration/);
+const { DANCEFLOOR_MOVES } = await load('src/lib/dancefloorMoves.ts');
+assert.equal(DANCEFLOOR_MOVES.length, 10);
+assert.equal(new Set(DANCEFLOOR_MOVES.map(m => JSON.stringify(m.poses))).size, 10, 'Every dance has distinct choreography');
+for (const move of DANCEFLOOR_MOVES) {
+  assert.equal(move.poses.length, 4);
+  for (const pose of move.poses) assert.ok(pose.length === 8 && pose.every(Number.isFinite));
+}
+
 assert.equal(qualifyingTrigger(config, 'channel.cheer', { bits: 99 }), null);
 assert.equal(qualifyingTrigger(config, 'channel.cheer', { bits: 100 }), 'bits');
 assert.equal(qualifyingTrigger(config, 'channel.subscribe', { is_gift: true }), null);
@@ -69,7 +80,12 @@ const crowd = Array.from({ length: 50 }, (_, i) => ({ id: `render-${i}`, name: i
 const rendered = renderToStaticMarkup(React.createElement(componentModule.exports.Dancefloor, { dancers: crowd, config }));
 assert.equal((rendered.match(/class="dance-person /g) ?? []).length, 50);
 assert.ok(rendered.includes('&lt;script&gt;bad&lt;/script&gt;')); assert.ok(!rendered.includes('<script>'));
-assert.ok(rendered.includes('dance-transparent')); assert.ok(rendered.includes('<img'));
+assert.ok(rendered.includes('dance-transparent')); assert.ok(rendered.includes('<image'));
+assert.equal((rendered.match(/class="dance-bones"/g) ?? []).length, 50);
+const extended = renderToStaticMarkup(React.createElement(componentModule.exports.Dancefloor, { dancers: crowd.map(d => ({ ...d, expiresAt: d.expiresAt + 60000 })), config }));
+assert.deepEqual([...extended.matchAll(/data-dance="([^"]+)"/g)].map(m => m[1]), [...rendered.matchAll(/data-dance="([^"]+)"/g)].map(m => m[1]), 'Repeated triggers preserve the assigned dance');
+assert.ok(new Set([...rendered.matchAll(/data-dance="([^"]+)"/g)].map(m => m[1])).size > 1, 'Viewers receive different dances');
+
 const noLabels = renderToStaticMarkup(React.createElement(componentModule.exports.Dancefloor, { dancers: crowd, config: { ...config, showNames: false, showFloor: true } }));
 assert.ok(!noLabels.includes('dance-name')); assert.ok(noLabels.includes('dance-with-floor'));
 console.log('Passed trigger rules, duration caps, deduplication, queue expiry/overflow, offline advancement, permanent routes, crowded component rendering, and escaped viewer names.');
@@ -107,7 +123,12 @@ try {
   assert.equal((await owner('/me', 'GET', undefined, false)).status, 401);
   assert.equal((await owner('/me')).status, 200);
   assert.equal((await owner('/me/rewards')).status, 200);
-  assert.equal((await owner('/me/profile', 'PUT', { ...config, maxDancers: 51 })).status, 400);
+  const invalidCapacity = await owner('/me/profile', 'PUT', { ...config, maxDancers: 51 });
+  assert.equal(invalidCapacity.status, 400);
+  assert.match((await invalidCapacity.json()).error, /Maximum dancers/);
+  const missingReward = await owner('/me/profile', 'PUT', { ...config, rewardId: '' });
+  assert.equal(missingReward.status, 400);
+  assert.match((await missingReward.json()).error, /Select an existing channel point reward/);
   assert.equal((await owner('/me/profile', 'PUT', { ...config, rewardId: 'missing' })).status, 400);
   assert.deepEqual(await (await owner('/me/profile', 'PUT', config)).json(), { saved: true });
   const publicSnapshot = () => mf.dispatchFetch(`${api}/channels/streamer/snapshot`);

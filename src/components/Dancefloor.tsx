@@ -1,10 +1,44 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useState, type CSSProperties } from 'react';
 import { dancerSeed, type DancefloorConfig, type DancefloorDancer } from '../lib/dancefloor';
+import { DANCEFLOOR_MOVES, type DancePose } from '../lib/dancefloorMoves';
+function jointStyle(poses: readonly DancePose[], joint: number): CSSProperties {
+  return Object.fromEntries(poses.map((pose, i) => [`--pose-${i}`, `${pose[joint]}deg`])) as CSSProperties;
+}
+function Limb({ x, y, joint, poses, length }: { x: number; y: number; joint: number; poses: readonly DancePose[]; length: number }) {
+  return <g transform={`translate(${x} ${y})`}><g className="dance-joint" style={jointStyle(poses, joint)}>
+    <path d={`M0 0V${length}`}/>
+    <g transform={`translate(0 ${length})`}><g className="dance-joint" style={jointStyle(poses, joint + 1)}><path d={`M0 0V${length}`}/></g></g>
+  </g></g>;
+}
 function Dancer({ dancer, config }: { dancer: DancefloorDancer; config: DancefloorConfig }) {
   const [failed, setFailed] = useState(false);
-  const seed = dancerSeed(dancer.id);
-  return <div className="dance-person dance-avatar-only" style={{ '--phase': `${-(seed % 40) / 10}s`, '--dance-cycle': `${4.8 + (seed % 4) * .4}s` } as CSSProperties}>
-    <div className="dance-avatar">{dancer.avatarUrl && !failed ? <img src={dancer.avatarUrl} alt="" onError={() => setFailed(true)} referrerPolicy="no-referrer"/> : <svg viewBox="0 0 48 48" aria-hidden="true"><circle cx="24" cy="18" r="9" fill="currentColor"/><path d="M8 44v-6c0-16 32-16 32 0v6" fill="currentColor"/></svg>}</div>
+  useEffect(() => setFailed(false), [dancer.avatarUrl]);
+  const clipId = useId().replace(/:/g, '');
+  const seed = dancerSeed(`${dancer.id}:${dancer.enteredAt}`);
+  const move = DANCEFLOOR_MOVES[seed % DANCEFLOOR_MOVES.length];
+  const style = {
+    '--phase': `${-(seed % 100) / 100 * move.seconds}s`, '--dance-cycle': `${move.seconds}s`,
+    '--stick-color': `hsl(${dancerSeed(dancer.id) % 360} 75% 78%)`,
+    ...Object.fromEntries(move.tilt.map((angle, i) => [`--tilt-${i}`, `${angle}deg`])),
+    ...Object.fromEntries(move.bounce.map((offset, i) => [`--bounce-${i}`, `${offset}px`])),
+  } as CSSProperties;
+  return <div className="dance-person dance-stick-figure" style={style} data-dance={move.name}>
+    <svg className="dance-figure" viewBox="0 0 120 166" role="img" aria-label={`${dancer.name} dancing ${move.name}`}>
+      <defs><clipPath id={clipId}><circle cx="60" cy="25" r="18"/></clipPath></defs>
+      <g className="dance-rig">
+        <g className="dance-bones" fill="none" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M60 44V96"/>
+          <Limb x={60} y={55} joint={0} poses={move.poses} length={22}/>
+          <Limb x={60} y={55} joint={2} poses={move.poses} length={22}/>
+          <Limb x={60} y={96} joint={4} poses={move.poses} length={25}/>
+          <Limb x={60} y={96} joint={6} poses={move.poses} length={25}/>
+        </g>
+        <circle className="dance-head" cx="60" cy="25" r="18"/>
+        {dancer.avatarUrl && !failed
+          ? <image href={dancer.avatarUrl} x="42" y="7" width="36" height="36" clipPath={`url(#${clipId})`} preserveAspectRatio="xMidYMid slice" onError={() => setFailed(true)}/>
+          : <g className="dance-face" fill="currentColor"><circle cx="54" cy="23" r="1.6"/><circle cx="66" cy="23" r="1.6"/><path d="M54 30Q60 35 66 30" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></g>}
+      </g>
+    </svg>
     {config.showNames && <span className="dance-name">{dancer.name}</span>}
   </div>;
 }

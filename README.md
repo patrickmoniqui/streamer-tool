@@ -354,7 +354,7 @@ npx wrangler d1 execute sport-live-feed-analytics --remote --file worker/sql/ana
 
 ## Dancefloor
 
-Dancefloor displays circular Twitch profile pictures on a transparent OBS
+Dancefloor displays stick figures with Twitch avatar heads on a transparent OBS
 browser source. Settings are at `/dancefloor/`; each channel has a permanent
 `/dancefloor/<channel>` OBS URL. Dancers stay on a single row and shrink to fit.
 
@@ -419,10 +419,14 @@ Reducing capacity removes the oldest active dancers. **Clear live floor** remove
 active/queued dancers and resets counts.
 
 Configure size, names, accent color, transparent background, and an optional floor
-image. The Avatar Only design shows circular Twitch profile pictures with
-optional usernames, slow gentle floating, and soft entrances/exits. There are no
-character bodies. The overlay is silent.
-The preview is local; **Save changes** publishes appearance and triggers, and
+image. Stick figures use Twitch profile pictures as circular heads and original
+Fortnite-inspired choreography: Floss, Take the L, Orange Justice, Dance Moves,
+Hype, Electro Shuffle, Best Mates, Fresh, Jubilation, and Wiggle. A seeded random
+assignment chooses a move for each admission and keeps it stable across snapshot
+updates and time extensions. Names remain optional; reduced-motion preferences
+show a static pose.
+The live floor shows the current OBS dancers; simulation buttons open a local
+preview. **Save changes** publishes appearance and triggers, and
 **Test in OBS** sends a manual dancer using saved settings. Only changes to saved
 subscription rules restart the socket; appearance and duration changes apply
 without interrupting the listener.

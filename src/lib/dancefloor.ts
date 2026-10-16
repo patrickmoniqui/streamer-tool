@@ -35,12 +35,22 @@ export const DEFAULT_DANCEFLOOR_CONFIG: DancefloorConfig = {
 export function validateDancefloorConfig(value: unknown): DancefloorConfig {
   const v = value as DancefloorConfig;
   const integer = (n: number, min: number, max: number) => Number.isInteger(n) && n >= min && n <= max;
-  if (!v || typeof v.rewardId !== 'string' || v.rewardId.length > 100 ||
-      !integer(v.minimumBits, 1, 1000000) || !integer(v.maxDancers, 1, 50) ||
-      !integer(v.dancerSize, 48, 180) || !/^#[a-f\d]{6}$/i.test(v.accentColor) ||
-      ['showNames', 'showFloor', 'transparent'].some(k => typeof v[k as keyof DancefloorConfig] !== 'boolean') ||
-      DANCE_TRIGGERS.some(k => typeof v.triggers?.[k]?.enabled !== 'boolean' || !integer(v.triggers[k].durationSeconds, 1, 300)) ||
-      (v.triggers.reward.enabled && !v.rewardId)) throw new Error('Invalid Dancefloor settings. Check reward, durations, and appearance values.');
+  const invalid = (message: string): never => { throw new Error(message); };
+  if (!v || typeof v !== 'object') invalid('Dancefloor settings must be an object.');
+  if (typeof v.rewardId !== 'string' || v.rewardId.length > 100) invalid('Choose a valid channel point reward.');
+  if (!integer(v.minimumBits, 1, 1000000)) invalid('Minimum Bits must be a whole number between 1 and 1,000,000.');
+  if (!integer(v.maxDancers, 1, 50)) invalid('Maximum dancers must be a whole number between 1 and 50.');
+  if (!integer(v.dancerSize, 48, 180)) invalid('Dancer size must be a whole number between 48 and 180 pixels.');
+  if (typeof v.accentColor !== 'string' || !/^#[a-f\d]{6}$/i.test(v.accentColor)) invalid('Choose a valid accent color.');
+  for (const key of ['showNames', 'showFloor', 'transparent'] as const) {
+    if (typeof v[key] !== 'boolean') invalid(`The ${key} setting must be on or off.`);
+  }
+  const labels: Record<DanceTrigger, string> = { reward: 'Channel point', bits: 'Bits', sub: 'New subscription', resub: 'Resub announcement', gift: 'Gift subscription' };
+  for (const key of DANCE_TRIGGERS) {
+    if (typeof v.triggers?.[key]?.enabled !== 'boolean') invalid(`${labels[key]} trigger must be on or off.`);
+    if (!integer(v.triggers[key].durationSeconds, 1, 300)) invalid(`${labels[key]} duration must be a whole number between 1 and 300 seconds.`);
+  }
+  if (v.triggers.reward.enabled && !v.rewardId.trim()) invalid('Select an existing channel point reward, or turn off the channel point trigger.');
   return {
     rewardId: v.rewardId, minimumBits: v.minimumBits, maxDancers: v.maxDancers,
     dancerSize: v.dancerSize, showNames: v.showNames, showFloor: v.showFloor,

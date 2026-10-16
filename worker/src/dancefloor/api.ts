@@ -68,7 +68,8 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
   if (path === '/me/rewards' && request.method === 'GET') return Response.json((await helix(request, env, `channel_points/custom_rewards?broadcaster_id=${encodeURIComponent(p.user_id)}`)).data);
   if (path === '/me/profile' && request.method === 'PUT') {
     let next: DancefloorConfig;
-    try { next = validateDancefloorConfig(await request.json()); } catch { fail('Invalid Dancefloor settings. Check the reward and appearance values.'); }
+    try { next = validateDancefloorConfig(await request.json()); }
+    catch (error) { fail(error instanceof SyntaxError ? 'Dancefloor settings must be valid JSON.' : (error as Error).message); }
     if (next.triggers.reward.enabled) {
       const rewards = await helix(request, env, `channel_points/custom_rewards?broadcaster_id=${encodeURIComponent(p.user_id)}`);
       if (!rewards.data.some(r => r.id === next.rewardId && r.is_enabled)) fail('Selected reward is unavailable or disabled.');

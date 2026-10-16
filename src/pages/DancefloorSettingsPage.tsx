@@ -5,7 +5,7 @@ import { TwitchConnection } from '../components/TwitchConnection';
 import { useDancefloorEvents } from '../lib/useDancefloorEvents';
 import { Dancefloor } from '../components/Dancefloor';
 import { dancefloorRequest } from '../lib/dancefloorClient';
-import { DEFAULT_DANCEFLOOR_CONFIG, DANCE_TRIGGERS, dancefloorOverlayUrl, type DancefloorConfig, type DancefloorDancer, type DancefloorSnapshot, type DanceTrigger } from '../lib/dancefloor';
+import { DEFAULT_DANCEFLOOR_CONFIG, validateDancefloorConfig, DANCE_TRIGGERS, dancefloorOverlayUrl, type DancefloorConfig, type DancefloorDancer, type DancefloorSnapshot, type DanceTrigger } from '../lib/dancefloor';
 interface Account { login: string; transport: 'websocket'; config: DancefloorConfig; snapshot: DancefloorSnapshot }
 interface Reward { id: string; title: string; is_enabled: boolean }
 const LABELS: Record<DanceTrigger, string> = { reward: 'Channel point reward', bits: 'Bits cheer', sub: 'New subscription', resub: 'Resub announcement', gift: 'Gift giver (once per batch)' };
@@ -52,7 +52,7 @@ export function DancefloorSettingsPage() {
   return <main className="dance-settings">
     <header className="dance-header"><a href="../">← All stream tools</a><span>KEYLIGHT STREAM TOOLS</span></header>
     <TwitchConnection/>
-    <div className="dance-title"><div><p className="dance-eyebrow">TURN SUPPORT INTO A PARTY</p><h1>Dancefloor</h1><p>Familiar faces. A gentle groove. Your community on screen.</p></div><span className="dance-beta">Experimental</span></div>
+    <div className="dance-title"><div><p className="dance-eyebrow">TURN SUPPORT INTO A PARTY</p><h1>Dancefloor</h1><p>Your community, stick figures, and 10 Fortnite-inspired moves.</p></div><span className="dance-beta">Experimental</span></div>
     <div className="dance-layout"><section className="dance-controls" aria-label="Dancefloor settings">
       <div className="dance-panel"><h2>1. Connect your channel</h2><p>Connect Twitch, choose your triggers, and keep this page open while streaming. Events arrive through a direct WebSocket connection.</p>
         <button className="dance-button" disabled={busy} onClick={() => void action(async () => { await connectBrowserTwitch(); })}>{account ? `Switch ${account.login}` : 'Connect with Twitch'}</button>
@@ -73,12 +73,12 @@ export function DancefloorSettingsPage() {
         </fieldset>
       </div>
       <div className="dance-panel"><h2>3. Make it yours</h2>
-        <div className="dance-fields"><label>Avatar size <input type="range" min="48" max="180" value={config.dancerSize} onChange={e => update('dancerSize', Number(e.target.value))}/><small>{config.dancerSize}px</small></label>
+        <div className="dance-fields"><label>Dancer size <input type="range" min="48" max="180" value={config.dancerSize} onChange={e => update('dancerSize', Number(e.target.value))}/><small>{config.dancerSize}px</small></label>
           <label>Maximum dancers<input type="number" min="1" max="50" value={config.maxDancers} onChange={e => update('maxDancers', Number(e.target.value))}/></label>
           <label>Accent color<input type="color" value={config.accentColor} onChange={e => update('accentColor', e.target.value)}/></label>
         </div>
         {([['showNames', 'Show usernames'], ['showFloor', 'Show floor graphic'], ['transparent', 'Transparent background']] as const).map(([key, title]) => <label className="dance-check" key={key}><input type="checkbox" checked={config[key]} onChange={e => update(key, e.target.checked)}/>{title}</label>)}
-        <button className="dance-button" disabled={busy || !account} onClick={() => void action(async () => { const result = await dancefloorRequest<{ warning?: string }>('/me/profile', 'PUT', config); await loadAccount(); setNotice(result.warning ? `Settings saved. ${result.warning}` : 'Changes saved. OBS will update automatically.'); })}>Save changes{dirty ? ' *' : ''}</button>
+        <button className="dance-button" disabled={busy || !account} onClick={() => void action(async () => { const result = await dancefloorRequest<{ warning?: string }>('/me/profile', 'PUT', validateDancefloorConfig(config)); await loadAccount(); setNotice(result.warning ? `Settings saved. ${result.warning}` : 'Changes saved. OBS will update automatically.'); })}>Save changes{dirty ? ' *' : ''}</button>
         {!account && <p>Connect Twitch to save your settings and get an OBS link.</p>}
       </div>
     </section>
