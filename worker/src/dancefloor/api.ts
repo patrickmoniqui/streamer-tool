@@ -84,8 +84,13 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
     const metadata = payload?.metadata;
     const subscription = payload?.payload?.subscription;
     const event = payload?.payload?.event;
-    if (metadata?.message_type !== 'notification' || typeof metadata.message_id !== 'string' || !/^[a-zA-Z0-9:_-]{1,160}$/.test(metadata.message_id) ||
-        subscription?.transport?.method !== 'websocket' || event?.broadcaster_user_id !== p.user_id || subscription?.condition?.broadcaster_user_id !== p.user_id || subscription.type !== metadata.subscription_type) fail('Invalid channel event.', 403);
+    // Twitch message IDs are opaque strings, including padded Base64. Do not
+    // restrict them to UUID/URL-safe characters; they are used only for deduplication.
+    if (metadata?.message_type !== 'notification' || typeof metadata.message_id !== 'string' ||
+        metadata.message_id.length < 1 || metadata.message_id.length > 512 || /[\u0000-\u001f\u007f]/.test(metadata.message_id)) fail('Invalid Twitch notification metadata.', 403);
+    if (subscription?.transport?.method !== 'websocket') fail('Invalid Twitch event transport.', 403);
+    if (event?.broadcaster_user_id !== p.user_id || subscription?.condition?.broadcaster_user_id !== p.user_id) fail('Twitch event channel does not match the connected account.', 403);
+    if (typeof subscription.type !== 'string' || subscription.type !== metadata.subscription_type) fail('Twitch event type does not match its subscription.', 403);
     const occurredAt = Date.parse(metadata.message_timestamp);
     if (!Number.isFinite(occurredAt) || Math.abs(Date.now() - occurredAt) > 600000) fail('This event is too old.');
     const trigger = qualifyingTrigger(config, subscription.type, event);

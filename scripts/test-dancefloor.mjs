@@ -113,6 +113,61 @@ try {
   const publicSnapshot = () => mf.dispatchFetch(`${api}/channels/streamer/snapshot`);
   assert.equal((await publicSnapshot()).status, 200);
   assert.equal((await (await publicSnapshot()).json()).config.rewardId, 'reward-1');
+  // Exercise the real browser EventSub client through the Worker and public OBS
+  // snapshot, rather than testing the socket and channel-point API separately.
+  const { connectTwitchEventSub } = await load('src/lib/twitchEventSub.ts');
+  const browserGlobals = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket };
+  let socket; let stopEvents; let deliveryTimeout; let emittedRedemption = false;
+  try {
+    globalThis.WebSocket = class {
+      listeners = new Map();
+      constructor() { socket = this; }
+      addEventListener(type, fn) { this.listeners.set(type, fn); }
+      close() {}
+      message(value) { this.listeners.get('message')({ data: JSON.stringify(value) }); }
+    };
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, 'https://api.twitch.tv/helix/eventsub/subscriptions');
+      const subscription = JSON.parse(init.body);
+      assert.equal(subscription.transport.session_id, 'channel-points-session');
+      return Response.json({ data: [{ ...subscription, status: 'enabled' }] }, { status: 202 });
+    };
+    const delivered = new Promise((resolve, reject) => {
+      deliveryTimeout = setTimeout(() => reject(new Error('Channel-point WebSocket relay timed out')), 3000);
+      stopEvents = connectTwitchEventSub({
+        token: 'browser-token', clientId: 'test-client', broadcasterId: '123', config,
+        onStatus: status => {
+          if (status.state !== 'listening' || emittedRedemption) return;
+          emittedRedemption = true;
+          const redemption = notification('channel.channel_points_custom_reward_redemption.add', {
+            id: 'realistic-redemption', user_id: 'socket-viewer', user_name: 'SocketViewer', status: 'unfulfilled',
+            reward: { id: 'reward-1', title: 'Dance!', cost: 100, prompt: '' },
+          });
+          // Notification IDs are opaque and can be padded Base64 rather than UUIDs.
+          redemption.metadata.message_id = 'fwrJ2-1sfKq7nKQZG36-ZdCkRvmmfso3AwFGzQBG31E=';
+          // Twitch sends RFC3339 timestamps with nanosecond precision.
+          redemption.metadata.message_timestamp = redemption.metadata.message_timestamp.replace('Z', '123456Z');
+          redemption.payload.subscription.condition.reward_id = 'reward-1';
+          socket.message(redemption);
+        },
+        onNotification: async message => {
+          const response = await owner('/me/events', 'POST', message);
+          const result = await response.json();
+          resolve({ status: response.status, result });
+        },
+      });
+    });
+    socket.message({ metadata: { message_type: 'session_welcome' }, payload: { session: { id: 'channel-points-session', keepalive_timeout_seconds: 10 } } });
+    const delivery = await delivered;
+    assert.equal(delivery.status, 200, JSON.stringify(delivery.result));
+    assert.equal(delivery.result.accepted, true);
+    const live = await (await publicSnapshot()).json();
+    assert.ok(live.dancers.some(d => d.id === 'socket-viewer' && d.name === 'SocketViewer'));
+    await owner('/me/clear', 'POST', {});
+  } finally {
+    stopEvents?.(); clearTimeout(deliveryTimeout);
+    globalThis.fetch = browserGlobals.fetch; globalThis.WebSocket = browserGlobals.WebSocket;
+  }
   const ignored = await owner('/me/events', 'POST', notification('channel.cheer', { user_id: 'alice', bits: 99 }));
   assert.equal((await ignored.json()).accepted, false);
   const first = notification('channel.cheer', { user_id: 'alice', user_name: 'Alice', bits: 100 });
@@ -129,6 +184,17 @@ try {
   const active = await (await publicSnapshot()).json();
   assert.equal(active.dancers.length, 6);
   assert.ok(active.dancers.some(d => d.name === 'Anonymous' && !d.avatarUrl));
+  for (const id of ['', 'x'.repeat(513), 'bad\nmessage']) {
+    const invalidId = notification('channel.cheer', { user_id: 'bad-id', bits: 100 }, { id });
+    const response = await owner('/me/events', 'POST', invalidId);
+    assert.equal(response.status, 403);
+    assert.match((await response.json()).error, /metadata/);
+  }
+  const opaque = notification('channel.cheer', { user_id: 'opaque-id', bits: 100 }, { id: 'opaque/notification+id==' });
+  assert.equal((await owner('/me/events', 'POST', opaque)).status, 200);
+  const opaqueBefore = (await (await publicSnapshot()).json()).dancers.find(d => d.id === 'opaque-id');
+  await owner('/me/events', 'POST', opaque);
+  assert.equal((await (await publicSnapshot()).json()).dancers.find(d => d.id === 'opaque-id').expiresAt, opaqueBefore.expiresAt, 'Opaque IDs still deduplicate deliveries');
   const malformed = notification('channel.cheer', { user_id: 'bad', bits: 100 });
   malformed.payload.event.broadcaster_user_id = 'other';
   assert.equal((await owner('/me/events', 'POST', malformed)).status, 403);
