@@ -14,6 +14,7 @@ export interface DancefloorDancer {
   id: string;
   name: string;
   avatarUrl: string;
+  chatColor?: string;
   enteredAt: number;
   expiresAt: number;
 }

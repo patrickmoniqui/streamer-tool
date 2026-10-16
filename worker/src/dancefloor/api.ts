@@ -47,6 +47,21 @@ async function avatar(request: Request, env: DancefloorEnv, userId: string) {
     return url;
   } catch { return ''; }
 }
+async function chatColor(request: Request, env: DancefloorEnv, userId: string): Promise<string> {
+  try {
+    const cached = await db(env).prepare('SELECT color, expires_at FROM dancefloor_chat_colors WHERE user_id = ?').bind(userId).first<{ color: string; expires_at: number }>();
+    if (cached && cached.expires_at > Date.now()) return cached.color;
+    const result = await helix(request, env, `chat/color?user_id=${encodeURIComponent(userId)}`);
+    const value = result.data.find(user => user.user_id === userId)?.color;
+    const color = typeof value === 'string' && /^#[a-f\d]{6}$/i.test(value) ? value : '';
+    await db(env).prepare('INSERT OR REPLACE INTO dancefloor_chat_colors (user_id, color, expires_at) VALUES (?, ?, ?)').bind(userId, color, Date.now() + 3600000).run();
+    return color;
+  } catch { return ''; } // A color lookup must never prevent the viewer from dancing.
+}
+async function appearance(request: Request, env: DancefloorEnv, userId: string) {
+  const [avatarUrl, color] = await Promise.all([avatar(request, env, userId), chatColor(request, env, userId)]);
+  return { avatarUrl, chatColor: color };
+}
 async function route(request: Request, env: DancefloorEnv): Promise<Response> {
   const path = new URL(request.url).pathname.replace('/api/dancefloor', '');
   if (request.method === 'OPTIONS') return new Response(null, { status: 204 });
@@ -102,14 +117,14 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
     const name = anonymous ? 'Anonymous' : String(event.user_name || event.user_login || 'Viewer').slice(0, 100);
     await room(env, p.user_id, '/config', config);
     const result = await room(env, p.user_id, '/event', {
-      id: metadata.message_id, viewerId, name, avatarUrl: anonymous ? '' : await avatar(request, env, viewerId),
+      id: metadata.message_id, viewerId, name, ...(anonymous ? { avatarUrl: '', chatColor: '' } : await appearance(request, env, viewerId)),
       durationSeconds: config.triggers[trigger].durationSeconds, occurredAt,
     });
     return Response.json({ accepted: true, snapshot: result });
   }
   if (path === '/me/test' && request.method === 'POST') {
     await room(env, p.user_id, '/config', config);
-    return Response.json(await room(env, p.user_id, '/test', { id: `test:${crypto.randomUUID()}`, viewerId: p.user_id, name: p.login, avatarUrl: await avatar(request, env, p.user_id), durationSeconds: 60, occurredAt: Date.now() }));
+    return Response.json(await room(env, p.user_id, '/test', { id: `test:${crypto.randomUUID()}`, viewerId: p.user_id, name: p.login, ...await appearance(request, env, p.user_id), durationSeconds: 60, occurredAt: Date.now() }));
   }
   if (path === '/me/clear' && request.method === 'POST') return Response.json(await room(env, p.user_id, '/clear', {}));
   if (path === '/me/disconnect' && request.method === 'POST') {

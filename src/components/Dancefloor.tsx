@@ -18,7 +18,7 @@ function Dancer({ dancer, config }: { dancer: DancefloorDancer; config: Danceflo
   const move = DANCEFLOOR_MOVES[seed % DANCEFLOOR_MOVES.length];
   const style = {
     '--phase': `${-(seed % 100) / 100 * move.seconds}s`, '--dance-cycle': `${move.seconds}s`,
-    '--stick-color': `hsl(${dancerSeed(dancer.id) % 360} 75% 78%)`,
+    '--stick-color': dancer.chatColor && /^#[a-f\d]{6}$/i.test(dancer.chatColor) ? dancer.chatColor : `hsl(${dancerSeed(dancer.id) % 360} 75% 78%)`,
     ...Object.fromEntries(move.tilt.map((angle, i) => [`--tilt-${i}`, `${angle}deg`])),
     ...Object.fromEntries(move.bounce.map((offset, i) => [`--bounce-${i}`, `${offset}px`])),
   } as CSSProperties;

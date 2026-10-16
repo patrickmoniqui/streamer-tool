@@ -12,3 +12,8 @@ CREATE TABLE IF NOT EXISTS dancefloor_avatars (
   url TEXT NOT NULL,
   expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dancefloor_chat_colors (
+  user_id TEXT PRIMARY KEY,
+  color TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);

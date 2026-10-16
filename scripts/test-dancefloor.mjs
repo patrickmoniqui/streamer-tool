@@ -54,6 +54,11 @@ applyDanceEvent(s, event('bob'), start + 1000);
 assert.equal(s.queue.length, 1); assert.equal(s.queue[0].deadline, deadline);
 advanceFloor(s, start + 121000);
 assert.equal(s.queue.length, 0); assert.equal(s.droppedCount, 1);
+const coloredQueue = initialFloor(); coloredQueue.config.maxDancers = 1;
+applyDanceEvent(coloredQueue, event('first'), start);
+applyDanceEvent(coloredQueue, { ...event('colored-viewer'), chatColor: '#FF4500' }, start);
+advanceFloor(coloredQueue, start + 61000);
+assert.equal(coloredQueue.dancers[0].chatColor, '#FF4500', 'Queue admission preserves Twitch color');
 const historical = initialFloor(); historical.config.maxDancers = 1;
 applyDanceEvent(historical, event('alice'), start); applyDanceEvent(historical, event('bob'), start);
 advanceFloor(historical, start + 90000);
@@ -80,6 +85,10 @@ const crowd = Array.from({ length: 50 }, (_, i) => ({ id: `render-${i}`, name: i
 const rendered = renderToStaticMarkup(React.createElement(componentModule.exports.Dancefloor, { dancers: crowd, config }));
 assert.equal((rendered.match(/class="dance-person /g) ?? []).length, 50);
 assert.ok(rendered.includes('&lt;script&gt;bad&lt;/script&gt;')); assert.ok(!rendered.includes('<script>'));
+const colorMarkup = color => renderToStaticMarkup(React.createElement(componentModule.exports.Dancefloor, { dancers: [{ ...crowd[0], chatColor: color }], config }));
+assert.ok(colorMarkup('#FF4500').includes('--stick-color:#FF4500'));
+assert.ok(colorMarkup('').includes('--stick-color:hsl('));
+assert.ok(colorMarkup('url(https://invalid.example)').includes('--stick-color:hsl('));
 assert.ok(rendered.includes('dance-transparent')); assert.ok(rendered.includes('<image'));
 assert.equal((rendered.match(/class="dance-bones"/g) ?? []).length, 50);
 const extended = renderToStaticMarkup(React.createElement(componentModule.exports.Dancefloor, { dancers: crowd.map(d => ({ ...d, expiresAt: d.expiresAt + 60000 })), config }));
@@ -92,6 +101,7 @@ console.log('Passed trigger rules, duration caps, deduplication, queue expiry/ov
 if (process.argv.includes('--unit')) process.exit(0);
 const bundle = await build({ entryPoints: ['worker/src/index.ts'], bundle: true, write: false, format: 'esm', platform: 'browser' });
 const persistDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dancefloor-ws-test-'));
+let colorRequests = new Map();
 let identity = { client_id: 'test-client', user_id: '123', login: 'streamer', expires_in: 3600 };
 const options = {
   d1Persist: path.join(persistDir, 'd1'), durableObjectsPersist: path.join(persistDir, 'rooms'),
@@ -102,6 +112,12 @@ const options = {
     const url = new URL(request.url);
     if (url.pathname === '/oauth2/validate') return WorkerResponse.json(identity);
     if (url.pathname === '/helix/channel_points/custom_rewards') return WorkerResponse.json({ data: [{ id: 'reward-1', title: 'Dance!', is_enabled: true }] });
+    if (url.pathname === '/helix/chat/color') {
+      const id = url.searchParams.get('user_id');
+      colorRequests.set(id, (colorRequests.get(id) ?? 0) + 1);
+      if (id === 'color-outage') return WorkerResponse.json({ error: 'Unavailable' }, { status: 503 });
+      return WorkerResponse.json({ data: [{ user_id: id, color: id === 'no-color' ? '' : '#1E90FF' }] });
+    }
     if (url.pathname === '/helix/users') return WorkerResponse.json({ data: [{ profile_image_url: 'https://static-cdn.jtvnw.net/avatar.png' }] });
     throw new Error(`Unexpected outbound request: ${request.url}`);
   },
@@ -194,8 +210,10 @@ try {
   const first = notification('channel.cheer', { user_id: 'alice', user_name: 'Alice', bits: 100 });
   assert.equal((await owner('/me/events', 'POST', first)).status, 200);
   const before = (await (await publicSnapshot()).json()).dancers[0];
+  assert.equal(before.chatColor, '#1E90FF');
   await owner('/me/events', 'POST', first);
   assert.equal((await (await publicSnapshot()).json()).dancers[0].expiresAt, before.expiresAt);
+  assert.equal(colorRequests.get('alice'), 1, 'Chat color lookups are cached across repeated events');
   await owner('/me/events', 'POST', notification('channel.subscription.gift', { user_id: 'giver', total: 50 }));
   await owner('/me/events', 'POST', notification('channel.subscribe', { user_id: 'recipient', is_gift: true }));
   await owner('/me/events', 'POST', notification('channel.subscribe', { user_id: 'subscriber', is_gift: false }));
@@ -204,7 +222,11 @@ try {
   await owner('/me/events', 'POST', notification('channel.cheer', { is_anonymous: true, bits: 100 }));
   const active = await (await publicSnapshot()).json();
   assert.equal(active.dancers.length, 6);
-  assert.ok(active.dancers.some(d => d.name === 'Anonymous' && !d.avatarUrl));
+  assert.ok(active.dancers.some(d => d.name === 'Anonymous' && !d.avatarUrl && !d.chatColor));
+  for (const user_id of ['no-color', 'color-outage']) {
+    assert.equal((await owner('/me/events', 'POST', notification('channel.cheer', { user_id, bits: 100 }))).status, 200);
+    assert.equal((await (await publicSnapshot()).json()).dancers.find(d => d.id === user_id).chatColor, '');
+  }
   for (const id of ['', 'x'.repeat(513), 'bad\nmessage']) {
     const invalidId = notification('channel.cheer', { user_id: 'bad-id', bits: 100 }, { id });
     const response = await owner('/me/events', 'POST', invalidId);
@@ -241,6 +263,7 @@ try {
   await mf.dispose(); mf = new Miniflare(options);
   const restarted = await (await publicSnapshot()).json();
   assert.equal(restarted.dancers[0].expiresAt, original.dancers[0].expiresAt);
+  assert.equal(restarted.dancers[0].chatColor, '#1E90FF', 'User color survives a room restart');
   assert.equal((await owner('/me/test', 'POST', {})).status, 200);
   assert.ok((await (await publicSnapshot()).json()).dancers.some(d => d.id === '123'));
   await owner('/me/clear', 'POST', {});

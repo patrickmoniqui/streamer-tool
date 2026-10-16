@@ -1,6 +1,6 @@
 import { DEFAULT_DANCEFLOOR_CONFIG, type DancefloorConfig, type DancefloorDancer, type DancefloorSnapshot, type DanceTrigger } from '../../../src/lib/dancefloor';
-export interface DanceEvent { id: string; viewerId: string; name: string; avatarUrl: string; durationSeconds: number; occurredAt: number }
-interface Waiting { viewerId: string; name: string; avatarUrl: string; durationSeconds: number; deadline: number }
+export interface DanceEvent { id: string; viewerId: string; name: string; avatarUrl: string; chatColor?: string; durationSeconds: number; occurredAt: number }
+interface Waiting { viewerId: string; name: string; avatarUrl: string; chatColor?: string; durationSeconds: number; deadline: number }
 export interface FloorState {
   config: DancefloorConfig; dancers: DancefloorDancer[]; queue: Waiting[];
   seen: Record<string, number>; revision: number; droppedCount: number;
@@ -17,7 +17,7 @@ export function advanceFloor(s: FloorState, now: number): void {
     s.queue = valid;
     while (s.dancers.length < s.config.maxDancers && s.queue.length) {
       const q = s.queue.shift()!;
-      s.dancers.push({ id: q.viewerId, name: q.name, avatarUrl: q.avatarUrl, enteredAt: at, expiresAt: at + q.durationSeconds * 1000 });
+      s.dancers.push({ id: q.viewerId, name: q.name, avatarUrl: q.avatarUrl, chatColor: q.chatColor, enteredAt: at, expiresAt: at + q.durationSeconds * 1000 });
       changed = true;
     }
   };
@@ -40,10 +40,14 @@ export function applyDanceEvent(s: FloorState, e: DanceEvent, now: number): void
   if (remaining <= 0) return;
   const dancer = s.dancers.find(d => d.id === e.viewerId);
   const queued = s.queue.find(q => q.viewerId === e.viewerId);
+  if (e.chatColor) {
+    if (dancer) dancer.chatColor = e.chatColor;
+    if (queued) queued.chatColor = e.chatColor;
+  }
   if (dancer) dancer.expiresAt = Math.min(now + 300000, dancer.expiresAt + remaining);
   else if (queued) queued.durationSeconds = Math.min(300, queued.durationSeconds + remaining / 1000);
-  else if (s.dancers.length < s.config.maxDancers) s.dancers.push({ id: e.viewerId, name: e.name, avatarUrl: e.avatarUrl, enteredAt: now, expiresAt: now + remaining });
-  else if (s.queue.length < 100) s.queue.push({ viewerId: e.viewerId, name: e.name, avatarUrl: e.avatarUrl, durationSeconds: duration, deadline: now + 120000 });
+  else if (s.dancers.length < s.config.maxDancers) s.dancers.push({ id: e.viewerId, name: e.name, avatarUrl: e.avatarUrl, chatColor: e.chatColor, enteredAt: now, expiresAt: now + remaining });
+  else if (s.queue.length < 100) s.queue.push({ viewerId: e.viewerId, name: e.name, avatarUrl: e.avatarUrl, chatColor: e.chatColor, durationSeconds: duration, deadline: now + 120000 });
   else s.droppedCount++;
   s.revision++;
 }

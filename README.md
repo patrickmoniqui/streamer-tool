@@ -423,7 +423,9 @@ image. Stick figures use Twitch profile pictures as circular heads and original
 Fortnite-inspired choreography: Floss, Take the L, Orange Justice, Dance Moves,
 Hype, Electro Shuffle, Best Mates, Fresh, Jubilation, and Wiggle. A seeded random
 assignment chooses a move for each admission and keeps it stable across snapshot
-updates and time extensions. Names remain optional; reduced-motion preferences
+updates and time extensions. Stick figures, avatar outlines, and names use each
+viewer’s Twitch chat color, cached for one hour. Viewers without a color, anonymous
+supporters, and failed lookups use a stable generated color. Names remain optional; reduced-motion preferences
 show a static pose.
 The live floor shows the current OBS dancers; simulation buttons open a local
 preview. **Save changes** publishes appearance and triggers, and
