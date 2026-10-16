@@ -16,6 +16,7 @@ import {
 } from '../lib/globe';
 import { GlobeScene } from './GlobeOverlayPage';
 import { TwitchConnection } from '../components/TwitchConnection';
+import { TwitchIcon } from '../components/TwitchIcon';
 import {
   buildTwitchConnectUrl,
   completeTwitchConnect,
@@ -419,11 +420,12 @@ export function GlobeSettingsPage() {
                 : 'Connect with Twitch to automatically select your channel.'}
             </p>
             <button
-              className="secondary-button full-width-button"
+              className="secondary-button full-width-button twitch-connect-button"
               type="button"
               disabled={checkingTwitch || !isTwitchConnectConfigured()}
               onClick={connectTwitch}
             >
+              <TwitchIcon />
               {checkingTwitch ? 'Checking Twitch connection…'
                 : twitchIdentity ? 'Switch Twitch account' : 'Connect with Twitch'}
             </button>
