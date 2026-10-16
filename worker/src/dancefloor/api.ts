@@ -106,7 +106,9 @@ async function route(request: Request, env: DancefloorEnv): Promise<Response> {
   if (path === '/me' && request.method === 'GET') return Response.json({ login: p.login, transport: 'websocket', config, snapshot: await room(env, p.user_id) });
   if (path === '/me/connect' && request.method === 'POST') {
     if (!env.DANCEFLOOR_ENCRYPTION_KEY) fail('Dancefloor background connection is not configured.', 503);
-    return Response.json(await room(env, p.user_id, '/connect', { token: bearer(request), userId: owner.userId, expiresAt: owner.expiresAt }));
+    const snapshot = await room(env, p.user_id, '/connect', { token: bearer(request), userId: owner.userId, expiresAt: owner.expiresAt });
+    if (!snapshot.connection) fail('The background receiver is updating. Retrying shortly.', 503);
+    return Response.json(snapshot);
   }
   if (path === '/me/rewards' && request.method === 'GET') return Response.json((await helix(request, env, `channel_points/custom_rewards?broadcaster_id=${encodeURIComponent(p.user_id)}`)).data);
   if (path === '/me/profile' && request.method === 'PUT') {

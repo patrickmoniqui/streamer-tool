@@ -46,6 +46,21 @@ assert.equal(qualifyingTrigger(config, 'channel.subscription.gift', { total: 50 
 assert.equal(qualifyingTrigger(config, 'channel.channel_points_custom_reward_redemption.add', { reward: { id: 'other' } }), null);
 assert.equal(qualifyingTrigger(config, 'channel.channel_points_custom_reward_redemption.add', { reward: { id: 'reward-1' } }), 'reward');
 assert.equal(qualifyingTrigger(defaults, 'channel.cheer', { bits: 1000 }), null);
+// During a distributed rollout, an older room may ignore the new /connect
+// command. The owner endpoint must retry rather than claim that it connected.
+const { handleDancefloor } = await load('worker/src/dancefloor/api.ts');
+const originalValidationFetch = globalThis.fetch;
+globalThis.fetch = async () => Response.json({ client_id: 'test-client', user_id: '123', login: 'streamer', expires_in: 3600 });
+try {
+  const statement = { bind() { return this; }, async run() {}, async first() { return { user_id: '123', login: 'streamer', config: JSON.stringify(config) }; } };
+  const response = await handleDancefloor(new Request('https://api.example/api/dancefloor/me/connect', { method: 'POST', headers: { Authorization: 'Bearer test-token' } }), {
+    TWITCH_CLIENT_ID: 'test-client', DANCEFLOOR_ENCRYPTION_KEY: 'test-only-background-encryption-secret-12345',
+    ANALYTICS_DB: { prepare: () => statement },
+    DANCEFLOOR_ROOMS: { idFromName: id => id, get: () => ({ fetch: async () => Response.json({ dancers: [], revision: 1 }) }) },
+  });
+  assert.equal(response.status, 503);
+  assert.match((await response.json()).error, /updating/);
+} finally { globalThis.fetch = originalValidationFetch; }
 const start = 1000000;
 let sequence = 0;
 const event = (viewerId, durationSeconds = 60, occurredAt = start) => ({ id: `event-${sequence++}`, viewerId, name: viewerId, avatarUrl: '', durationSeconds, occurredAt });

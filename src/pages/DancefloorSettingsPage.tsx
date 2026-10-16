@@ -31,16 +31,25 @@ export function DancefloorSettingsPage() {
   };
   useEffect(() => {
     let stopped = false;
-    const connect = browserIdentity ? dancefloorRequest('/me/connect', 'POST', {}).then(() => dancefloorRequest<Account>('/me')) : dancefloorRequest<Account>('/me');
-    void connect.then(next => {
-      if (stopped) return;
-      setAccount(next); setConfig(next.config); setSaved(true);
-      void dancefloorRequest<Reward[]>('/me/rewards').then(r => { if (!stopped) setRewards(r); }).catch(e => { if (!stopped) setRewardError(e.message); });
-    }).catch(error => { if (!stopped) { setAccount(undefined); if (error.status !== 401) setNotice(error.message); } });
+    let connectionRetry: ReturnType<typeof setTimeout>;
+    const initialize = () => {
+      const connect = browserIdentity ? dancefloorRequest('/me/connect', 'POST', {}).then(() => dancefloorRequest<Account>('/me')) : dancefloorRequest<Account>('/me');
+      void connect.then(next => {
+        if (stopped) return;
+        setAccount(next); setConfig(next.config); setSaved(true); setNotice('');
+        void dancefloorRequest<Reward[]>('/me/rewards').then(r => { if (!stopped) setRewards(r); }).catch(e => { if (!stopped) setRewardError(e.message); });
+      }).catch(error => {
+        if (stopped) return;
+        setAccount(undefined);
+        if (error.status !== 401) setNotice(error.message);
+        if (error.status === 503 && browserIdentity) connectionRetry = setTimeout(initialize, 5000);
+      });
+    };
+    initialize();
     const interval = setInterval(() => {
       if (accountRef.current) void dancefloorRequest<Account>('/me').then(next => { if (!stopped) setAccount(next); }).catch(() => {});
     }, 5000);
-    return () => { stopped = true; clearInterval(interval); };
+    return () => { stopped = true; clearInterval(interval); clearTimeout(connectionRetry); };
   }, [browserIdentity]);
   const update = <K extends keyof DancefloorConfig>(key: K, value: DancefloorConfig[K]) => setConfig(c => ({ ...c, [key]: value }));
   const trigger = (key: DanceTrigger, field: 'enabled' | 'durationSeconds', value: boolean | number) => setConfig(c => ({ ...c, triggers: { ...c.triggers, [key]: { ...c.triggers[key], [field]: value } } }));

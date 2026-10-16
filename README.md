@@ -455,7 +455,9 @@ valid. The legacy webhook endpoint returns 410.
 
 Production requires a strong random `DANCEFLOOR_ENCRYPTION_KEY` Worker secret.
 The GitHub Worker workflow provisions it from the repository secret of the same
-name before deployment. For a manual deployment, provision it with
+name before deployment. It also explicitly assigns the deployed version at 100%
+to complete the Durable Object rollout. Settings retries automatically if it
+reaches a room still running the previous version. For a manual deployment, provision it with
 `npx wrangler secret put DANCEFLOOR_ENCRYPTION_KEY --config worker/wrangler.toml`.
 Keep the key stable across deployments; replacing it requires owners to reconnect.
 Never use a `VITE_` variable for this key. `npm run dev` generates a separate key in
