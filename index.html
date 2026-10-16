@@ -200,6 +200,8 @@
         --tool-glow: rgba(89, 201, 255, 0.2);
       }
 
+      .tool-card.dancefloor { --tool-color: #b68cff; --tool-glow: rgba(182, 140, 255, 0.2); }
+
       .tool-card h2 {
         margin: 0;
         font-size: clamp(1.5rem, 2.4vw, 2rem);
@@ -339,6 +341,7 @@
         </div>
       </header>
 
+      <div id="twitch-connection"></div>
       <section class="tool-grid" aria-label="Stream tools">
         <a class="tool-card score" href="./game-score/">
           <div class="tool-logo" aria-hidden="true">
@@ -380,6 +383,11 @@
           </div>
           <span class="tool-action">Open settings</span>
         </a>
+        <a class="tool-card dancefloor" href="./dancefloor/">
+          <div class="tool-logo" aria-hidden="true"><svg viewBox="0 0 120 120" fill="none"><circle cx="60" cy="25" r="13" stroke="currentColor" stroke-width="6"/><path d="M60 43v34m0-25L33 65 18 47m42 5 26-12 15 13M60 77 40 99m20-22 24 20" stroke="currentColor" stroke-width="8" stroke-linecap="round"/></svg></div>
+          <div class="tool-copy"><div class="tool-title"><h2>Dancefloor</h2><span class="experimental-badge">Experimental</span></div><p>Turn Twitch rewards, Bits, and subscriptions into a party of dancing viewers.</p></div>
+          <span class="tool-action">Open settings</span>
+        </a>
       </section>
 
       <section class="credits-card" aria-label="Creator credits">
@@ -416,5 +424,6 @@
         </div>
       </section>
     </main>
+    <script type="module" src="./src/main-home.tsx"></script>
   </body>
 </html>

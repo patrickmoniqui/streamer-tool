@@ -1,0 +1,3 @@
+# Optional: only needed when overriding the frontend VITE_TWITCH_CLIENT_ID.
+TWITCH_CLIENT_ID="6vii4ube47seid33yqelo7gdh3cxz9"
+# Dancefloor WebSocket mode needs no Twitch client secret or webhook secrets.

@@ -164,7 +164,25 @@ try {
   assert.equal(new URL(configured.buildTwitchConnectUrl()).searchParams.get('client_id'), 'override-client');
   const wrongOrigin = await loadModule('src/lib/twitchConnect.ts', { VITE_TWITCH_REDIRECT_URI: 'https://other.example/globe/' });
   assert.throws(() => wrongOrigin.buildTwitchConnectUrl(), /origin/);
-  console.log('Passed browser OAuth callbacks, state/token rejection, token cleanup, rendered link controls, and Twitch chat checks.');
+  const { loadConfigFromFile } = await import('vite');
+  const previousMode = process.env.USE_LOCAL_WORKER;
+  delete process.env.USE_LOCAL_WORKER;
+  try {
+    const loaded = await loadConfigFromFile({ command: 'serve', mode: 'development' }, 'vite.config.ts');
+    for (const path of ['/api/twitch', '/api/dancefloor']) {
+      assert.equal(loaded.config.server.proxy[path].target, 'http://127.0.0.1:8787');
+      let handler;
+      loaded.config.server.proxy[path].configure({ on: (_event, fn) => handler = fn });
+      const response = { headersSent: false, writeHead(status) { this.status = status; }, end(body) { this.body = JSON.parse(body); } };
+      handler(new Error('No Worker'), {}, response);
+      assert.equal(response.status, 503); assert.match(response.body.error, /dev:all/);
+    }
+    assert.equal(loaded.config.server.proxy['/api'].target, 'https://api-web.nhle.com/v1');
+  } finally {
+    if (previousMode === undefined) delete process.env.USE_LOCAL_WORKER;
+    else process.env.USE_LOCAL_WORKER = previousMode;
+  }
+  console.log('Passed browser OAuth callbacks, state/token rejection, token cleanup, rendered link controls, Twitch chat, direct sign-in, and local Twitch proxy checks.');
 } finally {
   globalThis.fetch = realFetch;
 }

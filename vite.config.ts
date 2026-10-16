@@ -46,15 +46,15 @@ export default defineConfig(({ command }) => {
         configureServer(server) {
           server.middlewares.use((request, response, next) => {
             const requestUrl = new URL(request.url ?? '/', 'http://localhost');
-            const match = requestUrl.pathname.match(/^\/globe\/([A-Za-z0-9_]+)\/?$/);
+            const match = requestUrl.pathname.match(/^\/(globe|dancefloor)\/([A-Za-z0-9_]+)\/?$/);
 
             if (!match) {
               next();
               return;
             }
 
-            requestUrl.pathname = '/globe/overlay.html';
-            requestUrl.hash = new URLSearchParams({ channel: match[1].toLowerCase() }).toString();
+            requestUrl.pathname = `/${match[1]}/overlay.html`;
+            requestUrl.hash = new URLSearchParams({ channel: match[2].toLowerCase() }).toString();
             requestUrl.searchParams.delete('speed');
             response.statusCode = 302;
             response.setHeader('Location', `${requestUrl.pathname}${requestUrl.search}${requestUrl.hash}`);
@@ -67,6 +67,18 @@ export default defineConfig(({ command }) => {
       host: true,
       port: 5173,
       proxy: {
+        ...Object.fromEntries(['/api/twitch', '/api/dancefloor'].map(path => [path, {
+          target: 'http://127.0.0.1:8787',
+          changeOrigin: true,
+          configure(proxy: import('vite').HttpProxy.ProxyServer) {
+            proxy.on('error', (_error, _request, response) => {
+              if ('writeHead' in response && !response.headersSent) {
+                response.writeHead(503, { 'Content-Type': 'application/json' });
+                response.end(JSON.stringify({ error: 'The Twitch connection Worker is not running. Start the app with npm run dev:all.' }));
+              }
+            });
+          },
+        }])),
         '/api': {
           target: proxyTarget,
           changeOrigin: true,
@@ -93,6 +105,8 @@ export default defineConfig(({ command }) => {
           home: resolve(rootDir, 'index.html'),
           overlay: resolve(rootDir, 'overlay.html'),
           admin: resolve(rootDir, 'admin/index.html'),
+          dancefloor: resolve(rootDir, 'dancefloor/index.html'),
+          dancefloorOverlay: resolve(rootDir, 'dancefloor/overlay.html'),
           globe: resolve(rootDir, 'globe/index.html'),
           globeOverlay: resolve(rootDir, 'globe/overlay.html'),
           gameScore: resolve(rootDir, 'game-score/index.html'),

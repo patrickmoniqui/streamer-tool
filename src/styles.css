@@ -2230,6 +2230,15 @@ body.globe-transparent-shell {
   flex: 0 0 auto;
 }
 
+.twitch-connect-button {
+  gap: 8px;
+}
+
+.twitch-connect-button .twitch-icon {
+  width: 18px;
+  height: 18px;
+}
+
 .goal-flash {
   --goal-flash-rgb: 245, 182, 62;
   --goal-flash-duration: 15s;
