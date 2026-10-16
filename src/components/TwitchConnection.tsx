@@ -1,0 +1,21 @@
+import { useEffect, useState } from 'react';
+import { connectBrowserTwitch } from '../lib/twitchBrowserConnect';
+import { clearBrowserTwitch, getBrowserTwitchIdentity, subscribeBrowserTwitch } from '../lib/twitchConnect';
+import { TwitchIcon } from './TwitchIcon';
+export function TwitchConnection() {
+  const [identity, setIdentity] = useState(getBrowserTwitchIdentity);
+  useEffect(() => subscribeBrowserTwitch(() => setIdentity(getBrowserTwitchIdentity())), []);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState(false);
+  return <div className="shared-twitch" aria-label="Twitch account">
+    <div className="shared-twitch-controls"><span className="shared-twitch-account"><TwitchIcon/>{identity ? `Signed in as ${identity.login}` : 'Twitch account'}</span>
+      <button className="shared-twitch-button" disabled={busy} onClick={() => {
+        setBusy(true); setMessage('');
+        void connectBrowserTwitch().catch(error => setMessage(error.message)).finally(() => setBusy(false));
+      }}>{busy ? 'Connecting…' : identity ? 'Switch account' : 'Connect with Twitch'}</button>
+      {identity && <button className="shared-twitch-disconnect" disabled={busy} onClick={() => { clearBrowserTwitch(); setMessage('Signed out.'); }}>Disconnect</button>}
+    </div>
+    {message && <p className="shared-twitch-message" role="status">{message}</p>}
+    {identity && <p className="shared-twitch-message">Signed in for this browser visit. Twitch credentials stay in memory.</p>}
+  </div>;
+}

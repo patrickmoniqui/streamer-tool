@@ -15,12 +15,15 @@ import {
   type GlobeConfig,
 } from '../lib/globe';
 import { GlobeScene } from './GlobeOverlayPage';
+import { TwitchConnection } from '../components/TwitchConnection';
 import {
   buildTwitchConnectUrl,
   completeTwitchConnect,
   getTwitchConnectToken,
   refreshTwitchConnectToken,
   isTwitchConnectConfigured,
+  getBrowserTwitchIdentity,
+  subscribeBrowserTwitch,
   type TwitchIdentity,
 } from '../lib/twitchConnect';
 
@@ -120,6 +123,8 @@ export function GlobeSettingsPage() {
   const canUseTestingTools =
     import.meta.env.DEV || LOCAL_HOSTNAMES.has(window.location.hostname);
   const [config, setConfig] = useState<GlobeConfig>(() => loadStoredConfig());
+  const [browserIdentity, setBrowserIdentity] = useState(getBrowserTwitchIdentity);
+  useEffect(() => subscribeBrowserTwitch(() => setBrowserIdentity(getBrowserTwitchIdentity())), []);
   const [twitchIdentity, setTwitchIdentity] = useState<TwitchIdentity | null>(null);
   const [checkingTwitch, setCheckingTwitch] = useState(true);
   const [twitchError, setTwitchError] = useState<string | null>(null);
@@ -165,8 +170,9 @@ export function GlobeSettingsPage() {
     let active = true;
 
     void completeTwitchConnect()
-      .then(async (identity) => {
+      .then(async (legacyIdentity) => {
         if (!active) return;
+        const identity = getBrowserTwitchIdentity() ?? legacyIdentity;
         setTwitchIdentity(identity);
 
         if (identity) {
@@ -189,13 +195,14 @@ export function GlobeSettingsPage() {
       });
 
     return () => { active = false; };
-  }, []);
+  }, [browserIdentity]);
 
   useEffect(() => {
     if (!twitchIdentity) return;
     let active = true;
     const interval = window.setInterval(() => {
-      void refreshTwitchConnectToken().then((valid) => {
+      const validation = refreshTwitchConnectToken();
+      void validation.then((valid) => {
         if (active && !valid) {
           setTwitchIdentity(null);
           setTwitchError('Your Twitch connection has expired. Connect again to save changes.');
@@ -374,6 +381,7 @@ export function GlobeSettingsPage() {
 
   return (
     <main className="settings-page globe-settings-page">
+      <TwitchConnection/>
       <header className="settings-header">
         <a className="breadcrumb-link" href="../">
           <span aria-hidden="true">←</span>

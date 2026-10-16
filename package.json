@@ -4,16 +4,18 @@
   "version": "0.2.2",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "dev:frontend:worker": "cross-env USE_LOCAL_WORKER=1 vite",
+    "dev": "npm run dev:all",
+    "dev:frontend:worker": "node scripts/wait-for-worker.mjs && cross-env USE_LOCAL_WORKER=1 vite",
     "dev:all": "concurrently -k -n worker,app -c blue,green \"npm run dev:worker\" \"npm run dev:frontend:worker\"",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "version:patch": "npm version patch --no-git-tag-version",
     "version:minor": "npm version minor --no-git-tag-version",
     "version:major": "npm version major --no-git-tag-version",
-    "dev:worker": "wrangler dev --config worker/wrangler.toml --port 8787",
-    "deploy:worker": "wrangler deploy --config worker/wrangler.toml"
+    "dev:worker": "npm run dev:db && wrangler dev --config worker/wrangler.toml --port 8787",
+    "deploy:worker": "wrangler deploy --config worker/wrangler.toml",
+    "dev:frontend": "vite",
+    "dev:db": "wrangler d1 execute ANALYTICS_DB --local --config worker/wrangler.toml --file worker/sql/dancefloor.sql"
   },
   "dependencies": {
     "react": "^19.0.0",

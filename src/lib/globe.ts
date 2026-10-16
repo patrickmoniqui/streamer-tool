@@ -174,6 +174,7 @@ export function watchGlobeProfile(channel: string, onConfig: (config: GlobeConfi
 export async function saveGlobeProfile(config: GlobeConfig, accessToken: string): Promise<GlobeConfig> {
   const response = await fetch(`${getApiBaseUrl()}/globe/profiles/${encodeURIComponent(config.channel)}`, {
     method: 'PUT',
+    credentials: 'omit',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
     body: JSON.stringify({ config }),
   });

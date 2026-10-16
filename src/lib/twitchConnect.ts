@@ -1,4 +1,4 @@
-const STATE_KEY = 'keylight-globe-twitch-oauth';
+export const TWITCH_CONNECT_STATE_KEY = 'keylight-globe-twitch-oauth';
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
 // Twitch Client IDs are public. Deployments can override this application ID.
 const CLIENT_ID = import.meta.env.VITE_TWITCH_CLIENT_ID?.trim() || '6vii4ube47seid33yqelo7gdh3cxz9';
@@ -13,7 +13,10 @@ interface PendingLogin {
   clientId: string;
   redirectUri: string;
   createdAt: number;
+  popup?: boolean;
 }
+
+export function getTwitchClientId(): string { return CLIENT_ID; }
 
 export function isTwitchConnectConfigured(): boolean {
   return Boolean(CLIENT_ID);
@@ -36,25 +39,28 @@ export function getTwitchConnectRedirectUrl(): string {
   return url.toString();
 }
 
-export function buildTwitchConnectUrl(): string {
+export function buildTwitchConnectUrl(options: { redirectUri?: string; popup?: boolean; scopes?: string[] } = {}): string {
   const clientId = CLIENT_ID;
   if (!clientId) {
     throw new Error('Twitch connection is currently unavailable. Enter your channel manually.');
   }
 
+  const redirectUri = options.redirectUri ?? getTwitchConnectRedirectUrl();
+  if (new URL(redirectUri).origin !== new URL(window.location.href).origin) throw new Error('The Twitch redirect must use this app’s origin.');
   const pending: PendingLogin = {
     state: crypto.randomUUID(),
     clientId,
-    redirectUri: getTwitchConnectRedirectUrl(),
+    redirectUri,
+    popup: options.popup,
     createdAt: Date.now(),
   };
-  window.sessionStorage.setItem(STATE_KEY, JSON.stringify(pending));
+  window.sessionStorage.setItem(TWITCH_CONNECT_STATE_KEY, JSON.stringify(pending));
 
   const url = new URL('https://id.twitch.tv/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', pending.redirectUri);
   url.searchParams.set('response_type', 'token');
-  url.searchParams.set('scope', '');
+  url.searchParams.set('scope', (options.scopes ?? []).join(' '));
   url.searchParams.set('force_verify', 'true');
   url.searchParams.set('state', pending.state);
   return url.toString();
@@ -63,6 +69,29 @@ export function buildTwitchConnectUrl(): string {
 // Share the one-time callback across React Strict Mode's repeated effects.
 let callbackResult: Promise<TwitchIdentity | null> | undefined;
 let connectionToken: { value: string; expiresAt: number } | null = null;
+let connectionIdentity: TwitchIdentity | null = null;
+const identityListeners = new Set<() => void>();
+export function getBrowserTwitchIdentity(): TwitchIdentity | null { return getTwitchConnectToken() ? connectionIdentity : null; }
+export function subscribeBrowserTwitch(listener: () => void): () => void {
+  identityListeners.add(listener);
+  return () => { identityListeners.delete(listener); };
+}
+export function clearBrowserTwitch(): void {
+  connectionToken = null; connectionIdentity = null; callbackResult = undefined;
+  identityListeners.forEach(listener => listener());
+}
+function rememberIdentity(token: string, identity: { login: string; user_id: string; expires_in: number }): TwitchIdentity {
+  connectionToken = { value: token, expiresAt: Date.now() + identity.expires_in * 1000 };
+  connectionIdentity = { login: identity.login.toLowerCase(), userId: identity.user_id };
+  identityListeners.forEach(listener => listener());
+  return connectionIdentity;
+}
+export async function acceptBrowserTwitchToken(token: string): Promise<TwitchIdentity> {
+  const response = await fetch('https://id.twitch.tv/oauth2/validate', { headers: { Authorization: `OAuth ${token}` }, credentials: 'omit' });
+  const identity = await response.json() as { client_id: string; login: string; user_id: string; expires_in: number };
+  if (!response.ok || identity.client_id !== CLIENT_ID || typeof identity.user_id !== 'string' || !identity.user_id || typeof identity.login !== 'string' || !/^[a-z0-9_]+$/i.test(identity.login) || !Number.isFinite(identity.expires_in) || identity.expires_in <= 0) throw new Error('Unable to verify your Twitch account. Please connect again.');
+  return rememberIdentity(token, identity);
+}
 
 export function getTwitchConnectToken(): string | null {
   if (connectionToken && connectionToken.expiresAt > Date.now()) return connectionToken.value;
@@ -108,8 +137,8 @@ export function completeTwitchConnect(): Promise<TwitchIdentity | null> {
   const tokenType = response.get('token_type');
   let stored: string | null = null;
   try {
-    stored = window.sessionStorage.getItem(STATE_KEY);
-    window.sessionStorage.removeItem(STATE_KEY);
+    stored = window.sessionStorage.getItem(TWITCH_CONNECT_STATE_KEY);
+    window.sessionStorage.removeItem(TWITCH_CONNECT_STATE_KEY);
   } catch {
     // Reject below when state cannot be recovered; still remove the URL token.
   }
@@ -165,8 +194,7 @@ export function completeTwitchConnect(): Promise<TwitchIdentity | null> {
       throw new Error('Twitch returned an invalid account. Please connect again.');
     }
     // Keep the save credential only in memory; never put it in storage or an OBS URL.
-    connectionToken = { value: token, expiresAt: Date.now() + identity.expires_in * 1000 };
-    return { login: identity.login.toLowerCase(), userId: identity.user_id };
+    return rememberIdentity(token, identity as { login: string; user_id: string; expires_in: number });
   })();
   return callbackResult;
 }

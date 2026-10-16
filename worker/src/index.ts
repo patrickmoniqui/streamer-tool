@@ -1,3 +1,5 @@
+import { handleDancefloor, handleSharedTwitch, sharedTwitchCors, type DancefloorEnv } from './dancefloor/api';
+export { DancefloorRoom } from './dancefloor/object';
 const NHL_API_BASE = 'https://api-web.nhle.com/v1';
 const ESPN_SOCCER_SCOREBOARD_URL =
   'https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard';
@@ -7,7 +9,7 @@ const TWITCH_VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate';
 const SESSION_COOKIE_NAME = 'twitch_gate_session';
 const OAUTH_STATE_COOKIE_NAME = 'twitch_oauth_state';
 
-interface Env {
+interface Env extends DancefloorEnv {
   ANALYTICS_DB?: D1Database;
   ANALYTICS_READ_TOKEN?: string;
   SOCCER_SCOREBOARD_URL?: string;
@@ -1682,7 +1684,7 @@ function parseSavedGlobeConfig(value: unknown, channel: string): SavedGlobeConfi
 }
 
 async function handleGlobeProfile(request: Request, env: Env): Promise<Response> {
-  const headers = buildGlobeCorsHeaders();
+  const headers = sharedTwitchCors(request, env, buildGlobeCorsHeaders());
   headers.set('Cache-Control', 'no-store');
   const channel = new URL(request.url).pathname.split('/').at(-1)?.toLowerCase() ?? '';
   if (!/^[a-z0-9_]+$/.test(channel)) {
@@ -1710,11 +1712,8 @@ async function handleGlobeProfile(request: Request, env: Env): Promise<Response>
     const token = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : '';
     if (!token) return jsonResponse({ error: 'Twitch sign-in is required.' }, headers, 401);
     let identity: TwitchValidationResponse;
-    try {
-      identity = await validateTwitchToken(token);
-    } catch {
-      return jsonResponse({ error: 'Twitch sign-in has expired.' }, headers, 401);
-    }
+    try { identity = await validateTwitchToken(token); }
+    catch { return jsonResponse({ error: 'Twitch sign-in has expired.' }, headers, 401); }
     const clientId = env.TWITCH_CLIENT_ID?.trim() || '6vii4ube47seid33yqelo7gdh3cxz9';
     if (
       identity.client_id !== clientId || !identity.user_id ||
@@ -2628,6 +2627,9 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname.startsWith('/api/twitch/')) return handleSharedTwitch(request, env);
+    if (url.pathname.startsWith('/api/dancefloor/')) return handleDancefloor(request, env);
+
     if (request.method === 'OPTIONS') {
       if (
         url.pathname.startsWith('/auth/twitch/') ||
@@ -2649,7 +2651,7 @@ export default {
       if (url.pathname.startsWith('/api/globe/')) {
         return new Response(null, {
           status: 204,
-          headers: buildGlobeCorsHeaders(),
+          headers: url.pathname.startsWith('/api/globe/profiles/') ? sharedTwitchCors(request, env, buildGlobeCorsHeaders()) : buildGlobeCorsHeaders(),
         });
       }
 

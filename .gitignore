@@ -5,3 +5,8 @@ node_modules
 .env.local
 .env.production
 
+
+# Local Worker credentials
+worker/.dev.vars
+worker/.dev.vars.*
+!worker/.dev.vars.example

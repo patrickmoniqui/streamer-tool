@@ -1,0 +1,9 @@
+.shared-twitch { margin: 0 0 24px; padding: 14px 18px; border: 1px solid #9146ff55; border-radius: 12px; background: #9146ff0b; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 13px; color: #f4f0ff; }
+.shared-twitch-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.shared-twitch-account { display: inline-flex; align-items: center; gap: 9px; margin-right: auto; font-weight: 600; }
+.shared-twitch-account svg { width: 20px; height: 20px; flex-shrink: 0; color: #bc93ff; }
+.shared-twitch .shared-twitch-button, .shared-twitch .shared-twitch-disconnect { min-height: 36px; border: 1px solid #a873ff88; border-radius: 7px; padding: 7px 12px; background: #7136b5; color: white; font: inherit; cursor: pointer; text-decoration: none; }
+.shared-twitch .shared-twitch-button:disabled, .shared-twitch .shared-twitch-disconnect:disabled { opacity: .5; cursor: default; }
+.shared-twitch .shared-twitch-disconnect { background: transparent; }
+.shared-twitch a { color: #d0b2ff; font: inherit; }
+.shared-twitch .shared-twitch-message { color: #bdb3cf; font-size: 12px; line-height: 1.6; margin: 9px 0 0; }
